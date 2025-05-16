@@ -1,11 +1,12 @@
 'use client'
 
 import { createClient } from '@/utils/supabase/client'
+import { User } from '@supabase/supabase-js'
 import { useEffect, useState } from 'react'
 
 export default function SignInButton() {
   const [loading, setLoading] = useState(false)
-  const [user, setUser] = useState<any>(null)
+  const [user, setUser] = useState<User | null>(null)
   const [email, setEmail] = useState('')
   const [showForm, setShowForm] = useState(false)
   const [messageSent, setMessageSent] = useState(false)
