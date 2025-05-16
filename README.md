@@ -2,16 +2,19 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
-First, run the development server:
+First, set up your Supabase environment variables:
+
+1. Create a `.env.local` file in the root directory
+2. Add the following variables:
+```
+NEXT_PUBLIC_SUPABASE_URL=your-project-url
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+```
+
+Then, run the development server:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
 pnpm dev
-# or
-bun dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
@@ -19,6 +22,15 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+
+## Authentication
+
+This project uses Supabase Authentication. The sign-in button allows users to authenticate using OAuth providers. To configure authentication:
+
+1. Go to your Supabase project dashboard
+2. Navigate to Authentication > URL Configuration
+3. Add `http://localhost:3000/auth/callback` to the redirect URLs for local development
+4. Add your production URL with `/auth/callback` path for production
 
 ## Learn More
 
