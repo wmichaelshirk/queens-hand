@@ -28,7 +28,8 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <header className="p-4 flex justify-end">
+        <header className="p-4 flex justify-between">
+          <h1 className="text-2xl font-bold">The Queen’s Hand</h1>
           <SignInButton />
         </header>
         {children}
