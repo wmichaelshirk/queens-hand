@@ -231,27 +231,111 @@ function applyMove(state, card) {
 // ── ISMCTS interface ──────────────────────────────────────────────────────────
 
 /**
- * Produce a determinized world consistent with public information from
- * perspectivePlayer's point of view. Their hand is kept fixed; all other
- * players' hands are reshuffled among themselves (maintaining hand sizes).
+ * Scan trickLog for suit-void evidence.
+ * When a non-leading player fails to follow the led suit they are provably
+ * void in that suit for the rest of the hand.
+ * Returns Map<playerIndex, Set<suit>>.
+ */
+function _inferVoids(trickLog, perspectivePlayer) {
+  const voids = new Map();
+  for (const { ledSuit, plays } of trickLog) {
+    for (let i = 1; i < plays.length; i++) {   // plays[0] is the leader — no inference
+      const { playerIndex, card } = plays[i];
+      if (playerIndex === perspectivePlayer) continue;
+      if (card.suit !== ledSuit) {
+        if (!voids.has(playerIndex)) voids.set(playerIndex, new Set());
+        voids.get(playerIndex).add(ledSuit);
+      }
+    }
+  }
+  return voids;
+}
+
+/**
+ * Kuhn's augmenting-path step.
+ * Tries to assign card ci to a free slot, recursively displacing the current
+ * occupant of any slot if that occupant can be moved elsewhere.
+ * match[slotIdx] = cardIdx assigned to it (-1 = empty).
+ */
+function _augment(ci, match, visited, canUse) {
+  for (let si = 0; si < match.length; si++) {
+    if (visited[si]) continue;
+    if (!canUse(ci, si)) continue;
+    visited[si] = 1;
+    if (match[si] === -1 || _augment(match[si], match, visited, canUse)) {
+      match[si] = ci;
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Assign cards to players via bipartite matching, respecting suit-void constraints.
  *
- * For ISMCTS: call this once per simulation to sample a possible world,
+ * cards:   Card[]  — pre-shuffled hidden cards (shuffle drives randomness)
+ * players: { index: number, count: number }[]
+ * voids:   Map<playerIndex, Set<suit>>
+ *
+ * Returns Map<playerIndex, Card[]>.
+ * Throws if constraints are unsatisfiable (should never occur in a valid game state).
+ */
+function _randomMatchingAssign(cards, players, voids) {
+  // One slot entry per card each player needs, in player order.
+  const slots = players.flatMap(({ index, count }) =>
+    Array.from({ length: count }, () => index)
+  );
+
+  const canUse = (ci, si) => {
+    const pv = voids.get(slots[si]);
+    return !pv || !pv.has(cards[ci].suit);
+  };
+
+  const match = new Array(slots.length).fill(-1);   // match[slot] = card index
+  for (let ci = 0; ci < cards.length; ci++) {
+    _augment(ci, match, new Uint8Array(slots.length), canUse);
+  }
+
+  if (match.some(m => m === -1)) {
+    throw new Error('determinize: void constraints unsatisfiable — invalid game state');
+  }
+
+  const result = new Map(players.map(({ index }) => [index, []]));
+  for (let si = 0; si < slots.length; si++) {
+    result.get(slots[si]).push(cards[match[si]]);
+  }
+  return result;
+}
+
+/**
+ * Produce a determinized world consistent with public information from
+ * perspectivePlayer's point of view.
+ *
+ * Their hand is fixed. All other players' cards are reassigned via bipartite
+ * matching that enforces suit-void constraints from the trick history: if
+ * player P failed to follow suit S in any prior trick, they hold no S cards —
+ * no determinization will assign them one. Pre-shuffling the hidden card pool
+ * before matching is what drives randomness across calls.
+ *
+ * For ISMCTS: call once per simulation iteration to sample a possible world,
  * then run a standard MCTS rollout on the resulting fully-observable state.
  */
 function determinize(state, perspectivePlayer) {
   if (isHandOver(state)) return cloneState(state);
 
-  const s       = cloneState(state);
-  const sizes   = s.hands.map(h => h.length);
-  const hidden  = s.hands.flatMap((h, i) => i === perspectivePlayer ? [] : h);
-  const reshuffled = shuffle(hidden);
-  let cursor = 0;
-  for (let i = 0; i < state.playerCount; i++) {
-    if (i !== perspectivePlayer) {
-      s.hands[i] = reshuffled.slice(cursor, cursor + sizes[i]);
-      cursor += sizes[i];
-    }
+  const s = cloneState(state);
+
+  const voids   = _inferVoids(s.trickLog, perspectivePlayer);
+  const hidden  = shuffle(s.hands.flatMap((h, i) => i === perspectivePlayer ? [] : h));
+  const players = s.hands
+    .map((h, i) => ({ index: i, count: h.length }))
+    .filter(({ index }) => index !== perspectivePlayer);
+
+  const assignment = _randomMatchingAssign(hidden, players, voids);
+  for (const { index } of players) {
+    s.hands[index] = assignment.get(index);
   }
+
   return s;
 }
 
