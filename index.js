@@ -11,7 +11,12 @@ const display = require('./display');
 const greedy  = require('./ai/greedy');
 // const ismcts = require('./ai/ismcts'); // swap in when implemented
 
-const PLAYER_NAMES = ['You', 'West', 'North', 'East'];
+const NAMES_BY_COUNT = {
+  3: ['You', 'West', 'East'],
+  4: ['You', 'West', 'North', 'East'],
+  5: ['You', 'South West', 'North West', 'North East', 'South East'],
+  6: ['You', 'South West', 'North West', 'North', 'North East', 'South East'],
+};
 
 // AI selector: index 0 is human (null), others use greedy for now.
 function aiFor(playerIndex) {
@@ -26,10 +31,11 @@ function aiFor(playerIndex) {
  * Drives the engine purely through getLegalMoves / applyMove;
  * all display calls are isolated to this function.
  *
- * @param {object} state - initial state from engine.dealState()
+ * @param {object}   state       - initial state from engine.dealState()
+ * @param {string[]} playerNames - display name for each seat
  * @returns {object} terminal hand state
  */
-async function playHand(state) {
+async function playHand(state, playerNames) {
   while (!engine.isHandOver(state)) {
     const pi      = engine.getCurrentPlayer(state);
     const ledSuit = state.currentTrick.length > 0
@@ -37,7 +43,7 @@ async function playHand(state) {
       : null;
 
     if (state.currentTrick.length === 0) {
-      display.printTrickHeader(state.trickNum, engine.TRICKS_PER_HAND, PLAYER_NAMES[state.leader]);
+      display.printTrickHeader(state.trickNum, state.tricksPerHand, playerNames[state.leader]);
     }
 
     let card;
@@ -45,19 +51,19 @@ async function playHand(state) {
 
     if (!ai) {
       // Human turn: show context then ask
-      display.printTable(state.currentTrick, PLAYER_NAMES);
+      display.printTable(state.currentTrick, playerNames);
       display.printHand(state.hands[0], engine.getLegalMoves(state));
       card = await display.askCard(state);
     } else {
       card = ai.chooseCard(state.hands[pi], ledSuit);
-      display.printAIPlay(PLAYER_NAMES[pi], card);
+      display.printAIPlay(playerNames[pi], card);
     }
 
     const prevTrickCount = state.trickLog.length;
     state = engine.applyMove(state, card);
 
     if (state.trickLog.length > prevTrickCount) {
-      display.printTrickResult(state.trickLog.at(-1), PLAYER_NAMES);
+      display.printTrickResult(state.trickLog.at(-1), playerNames);
     }
   }
 
@@ -69,27 +75,30 @@ async function playHand(state) {
 async function main() {
   display.printWelcome();
 
-  let scores  = Array(engine.PLAYER_COUNT).fill(0);
-  let handNum = Math.floor(Math.random() * engine.PLAYER_COUNT);
+  const playerCount  = await display.askPlayerCount(NAMES_BY_COUNT);
+  const playerNames  = NAMES_BY_COUNT[playerCount];
+
+  let scores  = Array(playerCount).fill(0);
+  let handNum = Math.floor(Math.random() * playerCount);
 
   // ELO ratings — uncomment once elo.updateRatings() is implemented:
   // const elo     = require('./elo');
-  // let ratings   = elo.createRatings(engine.PLAYER_COUNT);
+  // let ratings   = elo.createRatings(playerCount);
 
   while (true) {
-    display.printScoreboard(PLAYER_NAMES, scores, engine.DEFAULT_LOSE_AT);
+    display.printScoreboard(playerNames, scores, engine.DEFAULT_LOSE_AT);
     await display.askContinue();
 
-    let state = engine.dealState({ scores, firstLeader: handNum % engine.PLAYER_COUNT });
-    state = await playHand(state);
+    let state = engine.dealState({ scores, playerCount, firstLeader: handNum % playerCount });
+    state = await playHand(state, playerNames);
 
-    display.printHandSummary(PLAYER_NAMES, state);
+    display.printHandSummary(playerNames, state);
     scores = engine.getGameResult(state).scores;
 
     // ratings = elo.updateRatings(ratings, engine.getGameResult(state));
 
     if (engine.isGameOver(state)) {
-      display.printGameOver(PLAYER_NAMES, state);
+      display.printGameOver(playerNames, state);
       break;
     }
 

@@ -151,6 +151,26 @@ async function askCard(state) {
   }
 }
 
+/**
+ * Ask how many players will play. Shows each option with its seat names.
+ * @param {{ [count: number]: string[] }} namesByCount  — e.g. { 3: ['You','West','East'], ... }
+ * @returns {number} chosen player count
+ */
+async function askPlayerCount(namesByCount) {
+  const counts = Object.keys(namesByCount).map(Number).sort((a, b) => a - b);
+  console.log('\nHow many players?');
+  for (const n of counts) {
+    const others = namesByCount[n].filter(name => name !== 'You');
+    console.log(`  [${n}]  You vs ${others.join(', ')}`);
+  }
+  while (true) {
+    const raw = await ask(`\nPlayer count [${counts.join('/')}]: `);
+    const n = parseInt(raw, 10);
+    if (counts.includes(n)) return n;
+    console.log(`  Enter one of: ${counts.join(', ')}`);
+  }
+}
+
 /** Pause until the user presses Enter. */
 async function askContinue(prompt = 'Press Enter to deal...') {
   await ask(`\n${prompt}`);
@@ -165,5 +185,5 @@ module.exports = {
   printWelcome, printScoreboard, printGameOver,
   printTrickHeader, printHand, printTable, printAIPlay,
   printTrickResult, printHandSummary,
-  askCard, askContinue, close,
+  askCard, askPlayerCount, askContinue, close,
 };

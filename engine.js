@@ -12,6 +12,8 @@
  *   hands:         Card[][]   — one array per player (index 0 = human)
  *   scores:        number[]   — cumulative game scores (carried across hands)
  *   handPenalties: number[]   — penalty points earned in the current hand (pre-sweep)
+ *   playerCount:   number     — 3 | 4 | 5 | 6
+ *   tricksPerHand: number     — cards dealt to each player (deck.length / playerCount)
  *   trickNum:      number     — 0-based index of the trick currently being played
  *   leader:        number     — playerIndex who leads the current trick
  *   currentTrick:  Play[]     — cards played so far in the current trick
@@ -30,14 +32,22 @@ const SUITS = ['♣', '♦', '♥', '♠'];
 const RANKS = ['7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
 const RANK_ORDER = Object.fromEntries(RANKS.map((r, i) => [r, i]));
 const SUIT_ORDER = Object.fromEntries(SUITS.map((s, i) => [s, i]));
-const TRICKS_PER_HAND = 8;
-const PLAYER_COUNT = 4;
+const SUPPORTED_PLAYER_COUNTS = [3, 4, 5, 6];
+const DEFAULT_PLAYER_COUNT = 4;
 const DEFAULT_LOSE_AT = 10;
 
 // ── Deck primitives ───────────────────────────────────────────────────────────
 
 function createDeck() {
   return SUITS.flatMap(suit => RANKS.map(rank => ({ suit, rank })));
+}
+
+// 4 players use the full 32-card deck (8 cards each).
+// 3, 5, and 6 players use a 30-card deck — 7♣ and 7♠ are omitted (10, 6, 5 each).
+function deckForPlayerCount(playerCount) {
+  const deck = createDeck();
+  if (playerCount === 4) return deck;
+  return deck.filter(c => !(c.rank === '7' && (c.suit === '♣' || c.suit === '♠')));
 }
 
 function shuffle(arr) {
@@ -80,17 +90,23 @@ function _applySweepBonus(penalties) {
 
 /**
  * Create the initial state for one hand.
- * @param {{ scores?: number[], firstLeader?: number, loseAt?: number }} config
+ * @param {{ scores?: number[], firstLeader?: number, loseAt?: number, playerCount?: number }} config
  */
-function dealState({ scores = [0, 0, 0, 0], firstLeader = 0, loseAt = DEFAULT_LOSE_AT } = {}) {
-  const deck = shuffle(createDeck());
-  const hands = Array.from({ length: PLAYER_COUNT }, (_, i) =>
-    deck.slice(i * TRICKS_PER_HAND, (i + 1) * TRICKS_PER_HAND)
+function dealState({ scores = null, firstLeader = 0, loseAt = DEFAULT_LOSE_AT, playerCount = DEFAULT_PLAYER_COUNT } = {}) {
+  if (!SUPPORTED_PLAYER_COUNTS.includes(playerCount)) {
+    throw new Error(`Unsupported player count: ${playerCount}. Must be one of ${SUPPORTED_PLAYER_COUNTS.join(', ')}`);
+  }
+  const deck = shuffle(deckForPlayerCount(playerCount));
+  const tricksPerHand = deck.length / playerCount;
+  const hands = Array.from({ length: playerCount }, (_, i) =>
+    deck.slice(i * tricksPerHand, (i + 1) * tricksPerHand)
   );
   return {
     hands,
-    scores: [...scores],
-    handPenalties: Array(PLAYER_COUNT).fill(0),
+    scores: scores ? [...scores] : Array(playerCount).fill(0),
+    handPenalties: Array(playerCount).fill(0),
+    playerCount,
+    tricksPerHand,
     trickNum: 0,
     leader: firstLeader,
     currentTrick: [],
@@ -109,7 +125,7 @@ function cloneState(state) {
 /** Whose turn is it? Returns -1 when the hand is not in progress. */
 function getCurrentPlayer(state) {
   if (state.phase !== 'playing') return -1;
-  return (state.leader + state.currentTrick.length) % PLAYER_COUNT;
+  return (state.leader + state.currentTrick.length) % state.playerCount;
 }
 
 /**
@@ -173,16 +189,16 @@ function applyMove(state, card) {
 
   s.currentTrick.push({ playerIndex: pi, card: { ...card } });
 
-  if (s.currentTrick.length === PLAYER_COUNT) {
+  if (s.currentTrick.length === s.playerCount) {
     const ledSuit = s.currentTrick[0].card.suit;
     const winPos = _trickWinnerPos(s.currentTrick, ledSuit);
     const winner = s.currentTrick[winPos].playerIndex;
 
     const isFirstTrick = s.trickNum === 0;
-    const isLastTrick  = s.trickNum === TRICKS_PER_HAND - 1;
+    const isLastTrick  = s.trickNum === s.tricksPerHand - 1;
     const hasQoC       = s.currentTrick.some(t => isQueenOfClubs(t.card));
 
-    const trickPenalties = Array(PLAYER_COUNT).fill(0);
+    const trickPenalties = Array(s.playerCount).fill(0);
     const penaltyLabels  = [];
     if (isFirstTrick) { trickPenalties[winner]++; penaltyLabels.push('first trick'); }
     if (isLastTrick)  { trickPenalties[winner]++; penaltyLabels.push('last trick'); }
@@ -196,15 +212,15 @@ function applyMove(state, card) {
       penaltyLabels,
     });
 
-    for (let i = 0; i < PLAYER_COUNT; i++) s.handPenalties[i] += trickPenalties[i];
+    for (let i = 0; i < s.playerCount; i++) s.handPenalties[i] += trickPenalties[i];
 
     s.trickNum++;
     s.leader = winner;
     s.currentTrick = [];
 
-    if (s.trickNum === TRICKS_PER_HAND) {
+    if (s.trickNum === s.tricksPerHand) {
       const final = _applySweepBonus(s.handPenalties);
-      for (let i = 0; i < PLAYER_COUNT; i++) s.scores[i] += final[i];
+      for (let i = 0; i < s.playerCount; i++) s.scores[i] += final[i];
       s.phase = s.scores.some(sc => sc >= s.loseAt) ? 'game_over' : 'hand_over';
     }
   }
@@ -230,7 +246,7 @@ function determinize(state, perspectivePlayer) {
   const hidden  = s.hands.flatMap((h, i) => i === perspectivePlayer ? [] : h);
   const reshuffled = shuffle(hidden);
   let cursor = 0;
-  for (let i = 0; i < PLAYER_COUNT; i++) {
+  for (let i = 0; i < state.playerCount; i++) {
     if (i !== perspectivePlayer) {
       s.hands[i] = reshuffled.slice(cursor, cursor + sizes[i]);
       cursor += sizes[i];
@@ -253,9 +269,10 @@ function getReward(state, playerIndex) {
 
 module.exports = {
   // Constants
-  SUITS, RANKS, RANK_ORDER, SUIT_ORDER, TRICKS_PER_HAND, PLAYER_COUNT, DEFAULT_LOSE_AT,
+  SUITS, RANKS, RANK_ORDER, SUIT_ORDER,
+  SUPPORTED_PLAYER_COUNTS, DEFAULT_PLAYER_COUNT, DEFAULT_LOSE_AT,
   // Card utilities
-  createDeck, shuffle, cardEquals, isQueenOfClubs,
+  createDeck, deckForPlayerCount, shuffle, cardEquals, isQueenOfClubs,
   // State lifecycle
   dealState, cloneState,
   // Queries
