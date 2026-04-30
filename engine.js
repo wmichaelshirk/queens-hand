@@ -116,8 +116,12 @@ function dealState({ scores = null, firstLeader = 0, loseAt = DEFAULT_LOSE_AT, p
   };
 }
 
+const _clone = typeof structuredClone === 'function'
+  ? structuredClone
+  : (x) => JSON.parse(JSON.stringify(x));
+
 function cloneState(state) {
-  return structuredClone(state);
+  return _clone(state);
 }
 
 // ── Query functions (no mutation) ─────────────────────────────────────────────
