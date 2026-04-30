@@ -1,17 +1,10 @@
-'use strict';
-
-/**
- * All terminal I/O for Slobberhannes.
- * This module owns the readline interface; call close() once at program exit.
- * No game logic lives here — only formatting and prompting.
- */
-
-const readline  = require('readline');
-const engine    = require('./engines/slobberhannes');
-const { SUIT_ORDER, RANK_ORDER } = engine;
+import * as readline from 'readline';
+import type { Card } from './types';
+import type { State, TrickRecord, Play } from './engines/slobberhannes';
+import * as engine from './engines/slobberhannes';
 
 const rl  = readline.createInterface({ input: process.stdin, output: process.stdout });
-const ask = (q) => new Promise(res => rl.question(q, res));
+const ask = (q: string): Promise<string> => new Promise(res => rl.question(q, res));
 
 // ── ANSI helpers ──────────────────────────────────────────────────────────────
 
@@ -23,26 +16,27 @@ const A = {
   yellow: '\x1b[33m',
 };
 
-function cardStr(c) {
+function cardStr(c: Card): string {
   const col = (c.suit === '♥' || c.suit === '♦') ? A.red : '';
   return `${col}${c.rank}${c.suit}${col ? A.reset : ''}`;
 }
 
-function hr(len = 52) { return '─'.repeat(len); }
+function hr(len = 52): string { return '─'.repeat(len); }
 
-function cardSort(a, b) {
-  const sd = SUIT_ORDER[a.suit] - SUIT_ORDER[b.suit];
-  return sd !== 0 ? sd : RANK_ORDER[a.rank] - RANK_ORDER[b.rank];
+// Fallback to Infinity so unknown suits (e.g. Tarock 'T') sort to the end
+// rather than silently producing NaN comparisons.
+function cardSort(a: Card, b: Card): number {
+  const sd = (engine.SUIT_ORDER[a.suit] ?? Infinity) - (engine.SUIT_ORDER[b.suit] ?? Infinity);
+  return sd !== 0 ? sd : (engine.RANK_ORDER[a.rank] ?? Infinity) - (engine.RANK_ORDER[b.rank] ?? Infinity);
 }
 
-// Shared by printHand and askCard — keeps displayed numbers and input indices in sync.
-function sortedLegalMoves(hand, legalMoves) {
+function sortedLegalMoves(hand: Card[], legalMoves: Card[]): Card[] {
   return hand.filter(c => legalMoves.some(m => engine.cardEquals(m, c))).sort(cardSort);
 }
 
 // ── Static screens ─────────────────────────────────────────────────────────────
 
-function printWelcome() {
+function printWelcome(): void {
   console.log(`\n${A.bold}╔════════════════════════════════════╗`);
   console.log(      `║    S L O B B E R H A N N E S      ║`);
   console.log(      `╚════════════════════════════════════╝${A.reset}`);
@@ -53,39 +47,37 @@ function printWelcome() {
   console.log(`  • First player to reach ${engine.DEFAULT_LOSE_AT} points loses.\n`);
 }
 
-function printScoreboard(names, scores, loseAt) {
+function printScoreboard(names: string[], scores: number[], loseAt: number): void {
   console.log(`\n${A.bold}Scoreboard${A.reset}`);
   names.forEach((name, i) => {
-    const filled = '█'.repeat(scores[i]);
-    const empty  = '░'.repeat(Math.max(0, loseAt - scores[i]));
-    console.log(`  ${name.padEnd(6)} ${String(scores[i]).padStart(2)}  ${filled}${empty}`);
+    const score   = scores[i] ?? 0;
+    const filled = '█'.repeat(score);
+    const empty  = '░'.repeat(Math.max(0, loseAt - score));
+    console.log(`  ${name.padEnd(6)} ${String(score).padStart(2)}  ${filled}${empty}`);
   });
 }
 
-function printGameOver(names, state) {
+function printGameOver(names: string[], state: State): void {
   const result = engine.getGameResult(state);
   console.log(`\n${A.bold}═══ GAME OVER ═══${A.reset}`);
-  names.forEach((n, i) => console.log(`  ${n}: ${result.scores[i]} pts`));
-  const loserNames = result.losers.map(i => names[i]);
-  console.log(`\n${A.red}Loser${loserNames.length > 1 ? 's' : ''}: ${loserNames.join(' & ')} (${result.scores[result.loser]} pts)${A.reset}\n`);
+  names.forEach((n, i) => console.log(`  ${n}: ${result.scores[i] ?? 0} pts`));
+  const loserNames = (result.losers ?? []).map(i => names[i] ?? `Player ${i}`);
+  const loserScore = result.loser !== null ? (result.scores[result.loser] ?? 0) : 0;
+  console.log(`\n${A.red}Loser${loserNames.length > 1 ? 's' : ''}: ${loserNames.join(' & ')} (${loserScore} pts)${A.reset}\n`);
 }
 
 // ── Per-trick display ─────────────────────────────────────────────────────────
 
-function printTrickHeader(trickNum, totalTricks, leaderName) {
+function printTrickHeader(trickNum: number, totalTricks: number, leaderName: string): void {
   console.log(`\n${hr()}`);
   console.log(`  Trick ${trickNum + 1} of ${totalTricks}   Leader: ${A.bold}${leaderName}${A.reset}`);
   console.log(hr());
 }
 
-/**
- * Display the player's hand.
- * Valid (legal) moves are sorted and numbered; invalid cards are greyed with no number.
- */
-function printHand(hand, legalMoves) {
-  const valid   = sortedLegalMoves(hand, legalMoves);
+function printHand(hand: Card[], legalMoves: Card[]): void {
+  const valid    = sortedLegalMoves(hand, legalMoves);
   const validSet = new Set(valid);
-  const invalid = hand.filter(c => !validSet.has(c)).sort(cardSort);
+  const invalid  = hand.filter(c => !validSet.has(c)).sort(cardSort);
 
   const parts = [
     ...valid.map((c, i) => `[${i + 1}]${cardStr(c)}`),
@@ -94,47 +86,44 @@ function printHand(hand, legalMoves) {
   console.log(`  Your hand: ${parts.join('  ')}`);
 }
 
-function printTable(trick, names) {
+function printTable(trick: Play[], names: string[]): void {
   if (!trick.length) return;
-  const entries = trick.map(t => `${A.dim}${names[t.playerIndex]}${A.reset}:${cardStr(t.card)}`);
+  const entries = trick.map(t => `${A.dim}${names[t.playerIndex] ?? `P${t.playerIndex}`}${A.reset}:${cardStr(t.card)}`);
   console.log(`  Table:     ${entries.join('  ')}`);
 }
 
-function printAIPlay(name, card) {
+function printAIPlay(name: string, card: Card): void {
   console.log(`  ${name} plays: ${cardStr(card)}`);
 }
 
-function printTrickResult(trickRecord, names) {
+function printTrickResult(trickRecord: TrickRecord, names: string[]): void {
   const { winner, penaltyLabels } = trickRecord;
   const pts = penaltyLabels.length;
-  let line = `\n  ${A.bold}${names[winner]}${A.reset} wins the trick.`;
+  let line = `\n  ${A.bold}${names[winner] ?? `Player ${winner}`}${A.reset} wins the trick.`;
   if (pts > 0) line += `  ${A.yellow}+${pts} (${penaltyLabels.join(', ')})${A.reset}`;
   console.log(line);
 }
 
 // ── Hand summary ──────────────────────────────────────────────────────────────
 
-function printHandSummary(names, state) {
+function printHandSummary(names: string[], state: State): void {
   const penalties = engine.getHandResult(state);
   console.log(`\n${A.bold}Hand summary${A.reset}`);
   names.forEach((name, i) => {
-    const delta = penalties[i] > 0
-      ? `${A.yellow}+${penalties[i]}${A.reset}`
+    const p = penalties[i] ?? 0;
+    const delta = p > 0
+      ? `${A.yellow}+${p}${A.reset}`
       : ` 0`;
-    console.log(`  ${name.padEnd(6)}: ${delta}   total: ${state.scores[i]}`);
+    console.log(`  ${name.padEnd(6)}: ${delta}   total: ${state.scores[i] ?? 0}`);
   });
 }
 
 // ── Input ─────────────────────────────────────────────────────────────────────
 
-/**
- * Prompt the human player to choose a card.
- * Accepts 1-based indices into the sorted valid-moves list shown by printHand.
- */
-async function askCard(state) {
-  const hand       = state.hands[engine.getCurrentPlayer(state)];
+async function askCard(state: State): Promise<Card> {
+  const hand       = state.hands[engine.getCurrentPlayer(state)] ?? [];
   const legalMoves = engine.getLegalMoves(state);
-  const ledSuit    = state.currentTrick.length > 0 ? state.currentTrick[0].card.suit : null;
+  const ledSuit    = state.currentTrick.length > 0 ? state.currentTrick[0]!.card.suit : null;
 
   const valid = sortedLegalMoves(hand, legalMoves);
 
@@ -146,21 +135,16 @@ async function askCard(state) {
   while (true) {
     const raw = await ask(`  Your play [1-${valid.length}]: `);
     const idx = parseInt(raw, 10) - 1;
-    if (idx >= 0 && idx < valid.length) return valid[idx];
+    if (idx >= 0 && idx < valid.length) return valid[idx]!;
     console.log(`  Enter a number 1–${valid.length}.`);
   }
 }
 
-/**
- * Ask how many players will play. Shows each option with its seat names.
- * @param {{ [count: number]: string[] }} namesByCount  — e.g. { 3: ['You','West','East'], ... }
- * @returns {number} chosen player count
- */
-async function askPlayerCount(namesByCount) {
+async function askPlayerCount(namesByCount: Record<number, string[]>): Promise<number> {
   const counts = Object.keys(namesByCount).map(Number).sort((a, b) => a - b);
   console.log('\nHow many players?');
   for (const n of counts) {
-    const others = namesByCount[n].filter(name => name !== 'You');
+    const others = (namesByCount[n] ?? []).filter(name => name !== 'You');
     console.log(`  [${n}]  You vs ${others.join(', ')}`);
   }
   while (true) {
@@ -171,16 +155,15 @@ async function askPlayerCount(namesByCount) {
   }
 }
 
-/** Pause until the user presses Enter. */
-async function askContinue(prompt = 'Press Enter to deal...') {
+async function askContinue(prompt = 'Press Enter to deal...'): Promise<void> {
   await ask(`\n${prompt}`);
 }
 
-function close() { rl.close(); }
+function close(): void { rl.close(); }
 
 // ── Exports ───────────────────────────────────────────────────────────────────
 
-module.exports = {
+export {
   cardStr,
   printWelcome, printScoreboard, printGameOver,
   printTrickHeader, printHand, printTable, printAIPlay,

@@ -35,16 +35,16 @@ depends on getting these right.
 Migrate while the codebase is small. `types.ts` and `tsconfig.json` already
 exist; the engines are pure functions and will convert with minimal friction.
 
-- [ ] Add `typescript` as a dev dependency; add `build` and `typecheck` scripts
+- [x] Add `typescript` as a dev dependency; add `build` and `typecheck` scripts
       to `package.json`
-- [ ] Convert `engine.js` → `engine.ts`; import and use types from `types.ts`;
-      update `playCard` (and any other move function) to return `EngineResult<State>`
-- [ ] Convert `elo.js` → `elo.ts`
-- [ ] Convert `display.js` → `display.ts`
-- [ ] Convert `index.js` → `index.ts`
-- [ ] Convert `ai/greedy.js` → `ai/greedy.ts`
-- [ ] Convert `ai/ismcts.js` → `ai/ismcts.ts`
-- [ ] Confirm `tsc --noEmit` passes with zero errors before moving on
+- [x] Convert `engine.js` → `engine.ts`; import and use types from `types.ts`;
+      update `applyMove` to return `EngineResult<State>`
+- [x] Convert `elo.js` → `elo.ts`
+- [x] Convert `display.js` → `display.ts`
+- [x] Convert `index.js` → `index.ts`
+- [x] Convert `ai/greedy.js` → `ai/greedy.ts`
+- [x] Convert `ai/ismcts.js` → `ai/ismcts.ts`
+- [x] Confirm `tsc --noEmit` passes with zero errors before moving on
 
 ### 0.1 Define the event protocol
 - [x] Enumerate all game events that the engine already implies (card played,
@@ -65,8 +65,8 @@ exist; the engines are pure functions and will convert with minimal friction.
 ### 0.2a Engine event contract (pure functions, no side effects)
 - [x] Engine remains purely functional — `EngineResult<TState>` in `types.ts`
       formalises the `{ state, events }` return shape; no callbacks or observers
-- [ ] Update `engine.js` move functions to actually return `EngineResult` —
-      tracked under 0.0 TypeScript migration
+- [x] Update `engine.js` move functions to actually return `EngineResult` —
+      done during 0.0 TypeScript migration
 
 ### 0.3 Define user/session identity
 - [ ] Define a `Player` record: `{ id, displayName, isBot, createdAt }`
