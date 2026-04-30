@@ -11,35 +11,42 @@ Goals: define the event model, server/client boundary, identity model, and
 persistence interface before writing any feature code. Everything downstream
 depends on getting these right.
 
+### 0.0 Migrate to TypeScript
+Migrate while the codebase is small. `types.ts` and `tsconfig.json` already
+exist; the engines are pure functions and will convert with minimal friction.
+
+- [ ] Add `typescript` as a dev dependency; add `build` and `typecheck` scripts
+      to `package.json`
+- [ ] Convert `engine.js` → `engine.ts`; import and use types from `types.ts`;
+      update `playCard` (and any other move function) to return `EngineResult<State>`
+- [ ] Convert `elo.js` → `elo.ts`
+- [ ] Convert `display.js` → `display.ts`
+- [ ] Convert `index.js` → `index.ts`
+- [ ] Convert `ai/greedy.js` → `ai/greedy.ts`
+- [ ] Convert `ai/ismcts.js` → `ai/ismcts.ts`
+- [ ] Confirm `tsc --noEmit` passes with zero errors before moving on
+
 ### 0.1 Define the event protocol
-- [ ] Enumerate all game events that the engine already implies (card played,
-      trick won, hand over, game over, penalty assessed, etc.)
-- [ ] Define a canonical JSON shape for each: `{ type, seq, payload, ts }`
-      where `seq` is a monotonic counter per game session
-- [ ] Separate "durable events" (needed for replay: initial state + moves) from
-      "cosmetic events" (animations, visual hints) — only durable events need
-      to be persisted
+- [x] Enumerate all game events that the engine already implies (card played,
+      trick won, hand over, game over, penalty assessed, etc.) — done in `types.ts`
+- [x] Define a canonical JSON shape for each — `BareEvent` union in `types.ts`;
+      `GameEvent<T>` wrapper carries `seq`, `ts`, `gameId`
+- [x] Separate durable events from cosmetic events — resolved by making events
+      prescriptive (`CardTransfer[]` in `TrickResolvedEvent`); the UI needs no
+      game-specific logic to execute any event
 
 ### 0.2 Define the server/client boundary
-- [ ] Decide what is "server-only" (authoritative game state, validation,
-      randomness, AI) vs. "client" (rendering, input capture)
-- [ ] Sketch a client protocol: clients send `{ type: 'PLAY_CARD', card }`;
-      server validates and broadcasts the resulting event stream
+- [x] Moves (client → server) typed as `Move` union in `types.ts`
+- [x] Events (server → clients) typed as `GameEvent<BareEvent>` in `types.ts`
 - [ ] Document that the console client and the web client are peers — both
-      connect to the same server, both receive the same event stream
+      connect to the same server, both receive the same event stream (deferred
+      to Phase 1 when the server exists)
 
 ### 0.2a Engine event contract (pure functions, no side effects)
-- [ ] The engine remains purely functional — no emit hooks, no callbacks,
-      no knowledge of transport or observers
-- [ ] Engine move functions return `{ state, events }` where `events` is an
-      ordered array of event objects describing what happened as a result of
-      the move (e.g. card played → trick completed → penalty assessed →
-      hand over)
-- [ ] The caller (game room / server) is solely responsible for: stamping
-      `seq` onto each event, persisting durable events, and broadcasting to
-      clients
-- [ ] This keeps the engine fully testable in isolation and reusable across
-      transports (local console, WebSocket server, replay engine, tests)
+- [x] Engine remains purely functional — `EngineResult<TState>` in `types.ts`
+      formalises the `{ state, events }` return shape; no callbacks or observers
+- [ ] Update `engine.js` move functions to actually return `EngineResult` —
+      tracked under 0.0 TypeScript migration
 
 ### 0.3 Define user/session identity
 - [ ] Define a `Player` record: `{ id, displayName, isBot, createdAt }`
