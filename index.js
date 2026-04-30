@@ -6,7 +6,7 @@
  * No game logic or formatting lives here; swap display or AI independently.
  */
 
-const engine  = require('./engine');
+const engine  = require('./engines/slobberhannes');
 const display = require('./display');
 const greedy  = require('./ai/greedy');
 const ismcts  = require('./ai/ismcts');

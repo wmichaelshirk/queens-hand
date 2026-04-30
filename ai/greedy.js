@@ -10,7 +10,7 @@
  * (The full state is not required here, but ISMCTS will receive it.)
  */
 
-const { RANK_ORDER, isQueenOfClubs } = require('../engine');
+const { RANK_ORDER, isQueenOfClubs } = require('../engines/slobberhannes');
 
 function lowest(cards) {
   return cards.reduce((low, c) => RANK_ORDER[c.rank] < RANK_ORDER[low.rank] ? c : low);

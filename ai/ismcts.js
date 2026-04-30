@@ -22,7 +22,7 @@
  * mistakes rather than random noise.
  */
 
-const engine = require('../engine');
+const engine = require('../engines/slobberhannes');
 
 const DEFAULT_ITERATIONS = 300;
 const UCB_C = Math.SQRT2;

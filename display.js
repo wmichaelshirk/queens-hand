@@ -7,7 +7,7 @@
  */
 
 const readline  = require('readline');
-const engine    = require('./engine');
+const engine    = require('./engines/slobberhannes');
 const { SUIT_ORDER, RANK_ORDER } = engine;
 
 const rl  = readline.createInterface({ input: process.stdin, output: process.stdout });

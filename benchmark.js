@@ -6,7 +6,7 @@
  * Chance baseline for 4 equal players: 25% win rate, 25% loss rate.
  */
 
-const engine  = require('./engine');
+const engine  = require('./engines/slobberhannes');
 const ismcts  = require('./ai/ismcts');
 const greedy  = require('./ai/greedy');
 
