@@ -9,7 +9,7 @@
 const engine  = require('./engine');
 const display = require('./display');
 const greedy  = require('./ai/greedy');
-// const ismcts = require('./ai/ismcts'); // swap in when implemented
+const ismcts  = require('./ai/ismcts');
 
 const NAMES_BY_COUNT = {
   3: ['You', 'West', 'East'],
@@ -18,10 +18,15 @@ const NAMES_BY_COUNT = {
   6: ['You', 'South West', 'North West', 'North', 'North East', 'South East'],
 };
 
-// AI selector: index 0 is human (null), others use greedy for now.
+// Returns a move function (state, pi) => card, or null for the human seat.
+// Player 1 (West / South West) uses ISMCTS; all others use greedy.
 function aiFor(playerIndex) {
   if (playerIndex === 0) return null;
-  return greedy;
+  if (playerIndex === 1) return (state, pi) => ismcts.chooseCard(state, pi);
+  return (state, pi) => {
+    const ledSuit = state.currentTrick.length > 0 ? state.currentTrick[0].card.suit : null;
+    return greedy.chooseCard(state.hands[pi], ledSuit);
+  };
 }
 
 // ── Hand loop ─────────────────────────────────────────────────────────────────
@@ -55,7 +60,7 @@ async function playHand(state, playerNames) {
       display.printHand(state.hands[0], engine.getLegalMoves(state));
       card = await display.askCard(state);
     } else {
-      card = ai.chooseCard(state.hands[pi], ledSuit);
+      card = ai(state, pi);
       display.printAIPlay(playerNames[pi], card);
     }
 
