@@ -1,31 +1,16 @@
-'use strict';
-
 // ── Cards ─────────────────────────────────────────────────────────────────────
 
-export type Suit = '♣' | '♦' | '♥' | '♠';
-export type Rank = '7' | '8' | '9' | '10' | 'J' | 'Q' | 'K' | 'A';
-export type TarockNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10
-                         | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21;
+// 'T' is the trump/tarock suit used by Tarock game variants.
+// The Fool is { suit: 'T', rank: '★' }.
+export type Suit = '♣' | '♦' | '♥' | '♠' | 'T';
 
-export interface SuitedCard {
-  kind: 'suited';
-  rank: Rank;
+// rank is a plain string so each game engine can define its own valid set
+// without forcing all games' ranks into a single union type.
+// Slobberhannes: '7'–'A'. Tarock trumps: '1'–'21'. Fool: '★'.
+export interface Card {
   suit: Suit;
-  id: string;   // e.g. 'Jc', 'Td', 'As', '7h'
+  rank: string;
 }
-
-export interface TarockCard {
-  kind: 'tarock';
-  number: TarockNumber;
-  id: string;   // e.g. 't1', 't14', 't21'
-}
-
-export interface FoolCard {
-  kind: 'fool';
-  id: 'sk';     // Sküs / Excuse — always returns to its player's trick pile
-}
-
-export type Card = SuitedCard | TarockCard | FoolCard;
 
 // ── Card locations ────────────────────────────────────────────────────────────
 
@@ -39,7 +24,7 @@ export type CardLocation =
 
 // A single card movement the UI should animate or apply.
 export interface CardTransfer {
-  card: string;         // card id
+  card: Card;
   from: CardLocation;
   to:   CardLocation;
 }
@@ -56,7 +41,7 @@ export interface PlayerInfo {
 
 export interface PlayCardMove {
   type: 'PLAY_CARD';
-  card: string;   // card id
+  card: Card;
 }
 
 export interface MakeBidMove {
@@ -69,7 +54,7 @@ export interface PassBidMove {
 }
 
 export interface MakeAnnouncementMove {
-  type: 'MAKE_ANNOUNCEMENT';
+  type:         'MAKE_ANNOUNCEMENT';
   announcement: string;   // game-specific
 }
 
@@ -105,10 +90,10 @@ export interface HandStartedEvent {
   dealer:     number;
 }
 
-// Each player receives only their own hand; opponents' are omitted or hidden.
+// Each player receives only their own hand; opponents' cards are omitted.
 export interface CardsDealtEvent {
   type:  'CARDS_DEALT';
-  hands: { [playerIndex: number]: string[] };   // card ids
+  hands: { [playerIndex: number]: Card[] };
 }
 
 export interface BidMadeEvent {
@@ -139,12 +124,12 @@ export interface AnnouncementMadeEvent {
 export interface CardPlayedEvent {
   type:   'CARD_PLAYED';
   player: number;
-  card:   string;
+  card:   Card;
 }
 
 // Emitted when a trick is fully played out.
 // `transfers` lists every card movement — most cards go to the winner,
-// but exceptions (e.g. the Fool/Excuse returning to its player) are included
+// but exceptions (e.g. the Fool returning to its player) are included
 // explicitly. The UI executes the transfer list without knowing why.
 export interface TrickResolvedEvent {
   type:      'TRICK_RESOLVED';
@@ -181,7 +166,7 @@ export interface TurnChangedEvent {
   type:        'TURN_CHANGED';
   player:      number;
   phase:       GamePhase;
-  legalMoves?: string[];   // card ids (or bid strings) the active player may choose
+  legalMoves?: Card[];
 }
 
 export type BareEvent =
