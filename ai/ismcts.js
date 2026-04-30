@@ -24,7 +24,7 @@
 
 const engine = require('../engine');
 
-const DEFAULT_ITERATIONS = 1000;
+const DEFAULT_ITERATIONS = 300;
 const UCB_C = Math.SQRT2;
 
 // ── Node ──────────────────────────────────────────────────────────────────────
