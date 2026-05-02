@@ -164,6 +164,7 @@ function close(): void { rl.close(); }
 // ── Exports ───────────────────────────────────────────────────────────────────
 
 export {
+  ask,
   cardStr,
   printWelcome, printScoreboard, printGameOver,
   printTrickHeader, printHand, printTable, printAIPlay,

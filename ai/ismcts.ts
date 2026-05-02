@@ -74,25 +74,20 @@ interface SideGoal {
 }
 
 interface RewardOptions {
-  horizon:    'hand' | 'game';
-  rewardNorm: { min: number; max: number } | null;
-  sideGoals:  SideGoal[];
+  horizon:   'hand' | 'game';
+  sideGoals: SideGoal[];
 }
 
 function computeReward(terminal: State, playerIndex: number, options: RewardOptions): number {
-  const { horizon, rewardNorm, sideGoals } = options;
+  const { horizon, sideGoals } = options;
 
+  // getReward already returns a normalised [0, 1] value; game-horizon uses raw scores.
   let r = horizon === 'game'
     ? -(terminal.scores[playerIndex] ?? 0)
     : (engine.getReward(terminal, playerIndex) ?? 0);
 
   for (const { weight = 1, evaluate } of sideGoals) {
     r += weight * evaluate(terminal, playerIndex);
-  }
-
-  if (rewardNorm) {
-    const { min, max } = rewardNorm;
-    if (max !== min) r = (r - min) / (max - min);
   }
 
   return r;
@@ -103,7 +98,6 @@ function computeReward(terminal: State, playerIndex: number, options: RewardOpti
 export interface ChooseCardOptions {
   iterations?:    number;
   horizon?:       'hand' | 'game';
-  rewardNorm?:    { min: number; max: number } | null;
   epsilon?:       number;
   rolloutPolicy?: RolloutPolicy | null;
   sideGoals?:     SideGoal[];
@@ -115,13 +109,12 @@ function chooseCard(state: State, playerIndex: number, options: ChooseCardOption
   const {
     iterations    = DEFAULT_ITERATIONS,
     horizon       = 'hand',
-    rewardNorm    = null,
     epsilon       = 0.0,
     rolloutPolicy = null,
     sideGoals     = [],
   } = options;
 
-  const rewardOpts: RewardOptions = { horizon, rewardNorm, sideGoals };
+  const rewardOpts: RewardOptions = { horizon, sideGoals };
   const root = makeNode();
 
   for (let iter = 0; iter < iterations; iter++) {

@@ -383,13 +383,14 @@ function determinize(state: State, perspectivePlayer: number): State {
 }
 
 /**
- * Scalar reward for ISMCTS rollouts.
- * Returns the negative hand-penalty for playerIndex (higher = better, max 0).
+ * Scalar reward for ISMCTS rollouts, normalised to [0, 1].
+ * Penalties range [0, 4]; linear map: 0 penalties → 1.0, sweep (4) → 0.0.
  * Returns null while the hand is in progress.
  */
 function getReward(state: State, playerIndex: number): number | null {
   if (!isHandOver(state)) return null;
-  return -(getHandResult(state)[playerIndex] ?? 0);
+  const penalty = getHandResult(state)[playerIndex] ?? 0;
+  return (4 - penalty) / 4;
 }
 
 // ── Exports ───────────────────────────────────────────────────────────────────
