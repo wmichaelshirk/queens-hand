@@ -16,11 +16,12 @@ export interface Card {
 
 // Anywhere a card can physically reside during or after a game.
 export type CardLocation =
-  | { zone: 'hand';    player: number }
-  | { zone: 'trick' }                    // face-up in the current trick
-  | { zone: 'won';     player: number }  // collected trick pile
-  | { zone: 'talon' }                    // face-down stock / widow
-  | { zone: 'discard' };
+  | { zone: 'hand';     player: number }
+  | { zone: 'trick' }                     // face-up in the current trick
+  | { zone: 'won';      player: number }  // collected trick pile
+  | { zone: 'talon' }                     // face-down stock / widow
+  | { zone: 'discard' }
+  | { zone: 'strawman'; player: number; pile: number };
 
 // A single card movement the UI should animate or apply.
 export interface CardTransfer {
@@ -169,6 +170,15 @@ export interface TurnChangedEvent {
   legalMoves?: Card[];
 }
 
+// Emitted when a strawman pile card is turned face-up (Tarock or King → goes to hand;
+// the opponent has a chance to see it before the CARDS_MOVED event transfers it).
+export interface CardRevealedEvent {
+  type:   'CARD_REVEALED';
+  player: number;   // owner of the pile
+  pile:   number;   // 0-based pile index
+  card:   Card;
+}
+
 export type BareEvent =
   | GameStartedEvent
   | HandStartedEvent
@@ -182,7 +192,8 @@ export type BareEvent =
   | CardsMovedEvent
   | HandScoredEvent
   | GameOverEvent
-  | TurnChangedEvent;
+  | TurnChangedEvent
+  | CardRevealedEvent;
 
 // ── Game phases ───────────────────────────────────────────────────────────────
 

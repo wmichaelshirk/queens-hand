@@ -50,6 +50,10 @@ function countCardPoints(cards: Card[]): number {
 function isTarock(c: Card): boolean { return c.suit === 'T'; }
 
 const PLAYER_COUNT          = 2  as const;
+// Typical hand outcome magnitude: Beck win/loss ≈ ±2–3; Furr/Mayr ≈ ±3–4; Valat ≈ ±12–15.
+// getReward normalises via tanh(r / REWARD_SCALE) → [0, 1]: normal results spread across
+// [0.1, 0.9]; extreme outliers (Valat) compress gracefully toward the tails.
+const REWARD_SCALE          = 4;   // private to engine; not exported
 const INITIAL_HAND_SIZE     = 15;   // 3 packets of 5 per player
 const STRAWMAN_PILE_COUNT   = 3;
 const STRAWMAN_PILE_SIZE    = 4;
@@ -211,7 +215,7 @@ export interface State {
   scores:             number[];          // cumulative game-point totals (zero-sum)
   playerCount:        typeof PLAYER_COUNT;
   phase:              'bidding' | 'playing' | 'hand_over' | 'game_over';
-  declarer:           number | null;     // null = both players passed (misdeal)
+  declarer:           number | null;     // null = both players passed (hand still played, 0 scoring)
   bidder:             number;            // whose turn it is to bid
   dealerIndex:        number;            // who dealt this hand
   scoring:            ScoringSystemName;
@@ -223,6 +227,7 @@ export interface State {
   pendingAnnouncement: string | null;    // if set, current player must play a card from this set
   handMultiplier:     number;            // basic game multiplier for this hand (2 after a draw)
   nextHandMultiplier: number;            // multiplier the session should pass to the next dealState
+  revealedInHand:     Card[][];          // per-player cards in hand publicly seen by both players
   // No targetScore — Strohmandeln is played for a hard score with no fixed session length.
   // The session layer asks players after each hand_over whether to continue.
 }
@@ -343,6 +348,7 @@ function dealState({
     pendingAnnouncement: null,
     handMultiplier,
     nextHandMultiplier:  1,
+    revealedInHand:      [[], []],
   };
 }
 
@@ -547,17 +553,98 @@ function computeHandSummary(state: State): HandSummary | null {
   };
 }
 
-/** Remove a card from the player's hand or the top of one of their strawman piles. */
-function _removePlayedCard(s: State, pi: number, card: Card): boolean {
+/**
+ * Remove a card from the player's hand or the top of one of their strawman piles.
+ * Returns the pile index (0-based) if removed from a pile, 'hand' if from hand,
+ * or null if the card was not found.
+ */
+function _removePlayedCard(s: State, pi: number, card: Card): number | 'hand' | null {
   const idx = (s.hands[pi] ?? []).findIndex(c => cardEquals(c, card));
-  if (idx !== -1) { s.hands[pi]!.splice(idx, 1); return true; }
-  for (const pile of s.strawmen[pi] ?? []) {
+  if (idx !== -1) {
+    s.hands[pi]!.splice(idx, 1);
+    const ri = (s.revealedInHand[pi] ?? []).findIndex(c => cardEquals(c, card));
+    if (ri !== -1) s.revealedInHand[pi]!.splice(ri, 1);
+    return 'hand';
+  }
+  const piles = s.strawmen[pi] ?? [];
+  for (let pileIdx = 0; pileIdx < piles.length; pileIdx++) {
+    const pile = piles[pileIdx]!;
     if (pile.cards.length > 0 && cardEquals(pile.cards[pile.cards.length - 1]!, card)) {
       pile.cards.pop();
-      return true;
+      return pileIdx;
     }
   }
-  return false;
+  return null;
+}
+
+/**
+ * After a card is played from a pile, process automatic transfers for the newly
+ * exposed top card (and any cascade beneath it):
+ *   • Tarock or King → CARD_REVEALED then CARDS_MOVED to owner's hand (repeats).
+ *   • Last card in pile (length === 1) → CARDS_MOVED to hand without being revealed.
+ *   • Any other suit card → stays face-up as the new playable pile top (stop).
+ */
+function _uncoverPile(s: State, pi: number, pileIdx: number, events: BareEvent[]): void {
+  const pile = s.strawmen[pi]![pileIdx]!;
+  const loc  = { zone: 'strawman' as const, player: pi, pile: pileIdx };
+
+  while (true) {
+    if (pile.cards.length === 0) break;
+
+    if (pile.cards.length === 1) {
+      const card = pile.cards.pop()!;
+      s.hands[pi]!.push(card);
+      events.push({ type: 'CARDS_MOVED', transfers: [{ card, from: loc, to: { zone: 'hand', player: pi } }], reason: 'bottom-to-hand' });
+      break;
+    }
+
+    const top = pile.cards[pile.cards.length - 1]!;
+    if (isTarock(top) || top.rank === 'K') {
+      events.push({ type: 'CARD_REVEALED', player: pi, pile: pileIdx, card: top });
+      pile.cards.pop();
+      s.hands[pi]!.push(top);
+      s.revealedInHand[pi]!.push(top);
+      events.push({ type: 'CARDS_MOVED', transfers: [{ card: top, from: loc, to: { zone: 'hand', player: pi } }], reason: 'tarock-or-king' });
+      // Loop: check whether the card beneath is also a T/K, or if the pile hit 1.
+    } else {
+      break;
+    }
+  }
+}
+
+/**
+ * Process the initial strawman uncovering for both players (called once after dealing,
+ * before bidding begins).
+ *
+ * For each pile (left-to-right per player):
+ *   1. If the face-up top is a Tarock or King, it is "set aside" (CARD_REVEALED) and
+ *      will be added to the player's hand after all piles are processed so the opponent
+ *      can view it during that window.
+ *   2. The bottom card is transferred to the player's hand immediately, face-down
+ *      (CARDS_MOVED, reason 'bottom-to-hand' — no preceding CARD_REVEALED).
+ *
+ * After all piles: set-aside T/K cards are moved to hand (CARDS_MOVED, reason 'tarock-or-king').
+ * No intra-pile cascade is triggered here; cascades only occur during play via _uncoverPile.
+ */
+/**
+ * Process the initial strawman uncovering for both players (called once after dealing,
+ * before bidding begins). Each pile is processed left-to-right via _uncoverPile:
+ * T/K tops cascade immediately to the player's hand (CARD_REVEALED + CARDS_MOVED);
+ * normal suit cards stop the cascade and remain face-up as the playable pile top.
+ * The bottom card is NOT moved here — it only goes to hand when it becomes the
+ * last remaining card in its pile (handled by _uncoverPile during play).
+ */
+function uncoverStrawmenInitial(state: State): EngineResult<State> {
+  const s      = cloneState(state);
+  const events: BareEvent[] = [];
+
+  for (let pi = 0; pi < PLAYER_COUNT; pi++) {
+    for (let pileIdx = 0; pileIdx < STRAWMAN_PILE_COUNT; pileIdx++) {
+      _uncoverPile(s, pi, pileIdx, events);
+    }
+  }
+
+  return { state: s, events };
 }
 
 /**
@@ -608,21 +695,9 @@ function _applyBid(state: State, move: Move): EngineResult<State> {
       // Forehand passed; dealer gets their chance.
       s.bidder = s.dealerIndex;
     } else {
-      // Both passed — misdeal. Dealer pays forehand the no-declarer value.
-      const forehand = 1 - s.dealerIndex;
-      const value    = SCORING_SYSTEMS[s.scoring].noDeclarerValue;
-      s.scores[forehand]!    += value;
-      s.scores[s.dealerIndex]! -= value;
+      // Both passed — no declarer. Hand is still played; eldest leads as always.
       s.declarer = null;
-      s.phase    = 'hand_over';
-      events.push({
-        type:          'HAND_SCORED',
-        deltas:        [
-          { player: forehand,    delta:  value, reason: 'no-declarer' },
-          { player: s.dealerIndex, delta: -value, reason: 'no-declarer' },
-        ],
-        runningTotals: [...s.scores],
-      });
+      s.phase    = 'playing';
     }
   }
 
@@ -662,8 +737,12 @@ function _applyCardPlay(state: State, card: Card): EngineResult<State> {
   const pi     = getCurrentPlayer(s);
   const events: BareEvent[] = [];
 
-  if (!_removePlayedCard(s, pi, card)) {
+  const removedFrom = _removePlayedCard(s, pi, card);
+  if (removedFrom === null) {
     throw new Error(`Card ${JSON.stringify(card)} not available for player ${pi}`);
+  }
+  if (typeof removedFrom === 'number') {
+    _uncoverPile(s, pi, removedFrom, events);
   }
 
   // Clear pendingAnnouncement once the required card has been played.
@@ -709,6 +788,29 @@ function _applyCardPlay(state: State, card: Card): EngineResult<State> {
           ],
           runningTotals: [...s.scores],
         });
+      } else {
+        // No declarer: whoever wins more card points wins noDeclarerValue.
+        // Draw (35–35) doubles the multiplier for the next hand.
+        const p0pts = countCardPoints(s.capturedCards[0] ?? []);
+        const p1pts = countCardPoints(s.capturedCards[1] ?? []);
+        if (p0pts === p1pts) {
+          s.nextHandMultiplier = s.handMultiplier * 2;
+        } else {
+          s.nextHandMultiplier = 1;
+          const winner = p0pts > p1pts ? 0 : 1;
+          const loser  = 1 - winner;
+          const delta  = SCORING_SYSTEMS[s.scoring].noDeclarerValue * s.handMultiplier;
+          s.scores[winner]! += delta;
+          s.scores[loser]!  -= delta;
+          events.push({
+            type:          'HAND_SCORED',
+            deltas:        [
+              { player: winner, delta:  delta, reason: 'no-declarer-win' },
+              { player: loser,  delta: -delta, reason: 'no-declarer-loss' },
+            ],
+            runningTotals: [...s.scores],
+          });
+        }
       }
 
       s.phase = 'hand_over';
@@ -723,19 +825,34 @@ function _applyCardPlay(state: State, card: Card): EngineResult<State> {
 // ── ISMCTS interface ──────────────────────────────────────────────────────────
 
 /**
- * Infer suit voids from the trick log.
- * If a player failed to follow the led suit and did not play a tarock
- * (which would be illegal), they are void in that suit for the rest of the hand.
+ * Scan the trick log for provable suit/tarock voids (opponents only).
+ *
+ * Farbzwang (follow-suit obligation):
+ *   1. Must follow the led suit if possible.
+ *   2. Otherwise must play a Tarock.
+ *   3. Otherwise play any card.
+ *
+ * So when a non-leading player plays off-suit:
+ *   - They are void in the led suit (always).
+ *   - If they played a non-Tarock off-suit, they are also void in Tarocks
+ *     (they would have been forced to play one otherwise).
  */
-function _inferVoids(trickLog: TrickRecord[], perspectivePlayer: number): Map<number, Set<string>> {
+function _inferVoids(
+  trickLog: TrickRecord[],
+  perspectivePlayer: number,
+): Map<number, Set<string>> {
   const voids = new Map<number, Set<string>>();
+  const addVoid = (pi: number, suit: string) => {
+    if (!voids.has(pi)) voids.set(pi, new Set());
+    voids.get(pi)!.add(suit);
+  };
   for (const { ledSuit, plays } of trickLog) {
     for (let i = 1; i < plays.length; i++) {
       const { playerIndex, card } = plays[i]!;
       if (playerIndex === perspectivePlayer) continue;
-      if (card.suit !== ledSuit && !isTarock(card)) {
-        if (!voids.has(playerIndex)) voids.set(playerIndex, new Set());
-        voids.get(playerIndex)!.add(ledSuit);
+      if (card.suit !== ledSuit) {
+        addVoid(playerIndex, ledSuit);
+        if (!isTarock(card)) addVoid(playerIndex, 'T');
       }
     }
   }
@@ -743,61 +860,150 @@ function _inferVoids(trickLog: TrickRecord[], perspectivePlayer: number): Map<nu
 }
 
 /**
+ * Kuhn's augmenting-path step.
+ * Tries to assign card ci to a free slot, displacing the current occupant if needed.
+ * match[slotIdx] = cardIdx assigned to it (-1 = empty).
+ */
+function _augment(
+  ci: number,
+  match: number[],
+  visited: Uint8Array,
+  canUse: (ci: number, si: number) => boolean,
+): boolean {
+  for (let si = 0; si < match.length; si++) {
+    if (visited[si]) continue;
+    if (!canUse(ci, si)) continue;
+    visited[si] = 1;
+    if (match[si] === -1 || _augment(match[si]!, match, visited, canUse)) {
+      match[si] = ci;
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Produce a determinized world consistent with perspectivePlayer's information.
  *
- * Hidden from perspectivePlayer:
- *   - Opponent's entire hand
- *   - The face-down bottom card of every pile (any player) with length > 1,
- *     including perspectivePlayer's own piles (the bottom is unknown to everyone
- *     until it becomes the last remaining card in the pile)
+ * Hidden cards (all redistributed together):
+ *   - Opponent's entire hand  — void constraints from Farbzwang apply.
+ *   - ALL face-down pile cards (indices 0..length-2) for BOTH players.
+ *     Even perspectivePlayer's own pile bottoms are unknown until they become
+ *     the last card in the pile.  No void constraints apply to pile slots.
  *
- * All hidden cards are collected, shuffled, and reassigned randomly.
- * TODO: apply _inferVoids constraint solving (bipartite matching) as in slobberhannes.
+ * Bipartite matching (Kuhn's algorithm) assigns cards to slots while respecting
+ * the void constraints on the opponent's hand slots. Pile slots are unconstrained.
+ * Falls back to a plain random shuffle if constraints are unsatisfiable.
  */
 function determinize(state: State, perspectivePlayer: number): State {
   if (isHandOver(state)) return cloneState(state);
 
   const s        = cloneState(state);
   const opponent = 1 - perspectivePlayer;
+  const voids    = _inferVoids(s.trickLog, perspectivePlayer);
 
-  const hidden: Card[] = [...s.hands[opponent]!];
-  const faceDownSlots: { owner: number; pileIdx: number }[] = [];
+  // ── Collect hidden cards and their destination slots ──────────────────────
+
+  // Cards in the opponent's hand that were publicly revealed (T/K from piles) are
+  // known to the perspective player and must stay pinned in the opponent's hand.
+  const oppRevealed = s.revealedInHand[opponent]!;
+  const oppUnknown  = s.hands[opponent]!.filter(
+    c => !oppRevealed.some(r => cardEquals(r, c))
+  );
+  const oppHandSize = oppUnknown.length;   // only unknown slots need filling
+
+  const hidden: Card[] = [...oppUnknown];
+
+  type PileSlot = { owner: number; pileIdx: number; pos: number };
+  const pileSlots: PileSlot[] = [];
 
   for (let pi = 0; pi < PLAYER_COUNT; pi++) {
     for (let pileIdx = 0; pileIdx < STRAWMAN_PILE_COUNT; pileIdx++) {
       const pile = s.strawmen[pi]![pileIdx]!;
-      if (pile.cards.length > 1) {
-        hidden.push(pile.cards[0]!);
-        faceDownSlots.push({ owner: pi, pileIdx });
+      // Indices 0..length-2 are face-down; index length-1 is the face-up top (known).
+      for (let pos = 0; pos < pile.cards.length - 1; pos++) {
+        hidden.push(pile.cards[pos]!);
+        pileSlots.push({ owner: pi, pileIdx, pos });
       }
     }
   }
 
-  const pool = shuffle(hidden);
-  s.hands[opponent] = pool.splice(0, s.hands[opponent]!.length);
-  for (const { owner, pileIdx } of faceDownSlots) {
-    s.strawmen[owner]![pileIdx]!.cards[0] = pool.shift()!;
+  // ── Bipartite matching ─────────────────────────────────────────────────────
+
+  const totalSlots = oppHandSize + pileSlots.length;
+  // Slots 0..oppHandSize-1 belong to opponent (void-constrained).
+  // Slots oppHandSize..totalSlots-1 are pile slots (unconstrained, sentinel = PLAYER_COUNT).
+  const slotOwner = new Array<number>(totalSlots);
+  for (let i = 0; i < oppHandSize; i++)          slotOwner[i]                = opponent;
+  for (let i = 0; i < pileSlots.length; i++)     slotOwner[oppHandSize + i]  = PLAYER_COUNT;
+
+  const shuffled = shuffle(hidden);
+
+  const canUse = (ci: number, si: number): boolean => {
+    if (slotOwner[si] === PLAYER_COUNT) return true;   // pile slot: always ok
+    const pv = voids.get(slotOwner[si]!);
+    return !pv || !pv.has(shuffled[ci]!.suit);
+  };
+
+  const match = new Array<number>(totalSlots).fill(-1);
+  for (let ci = 0; ci < shuffled.length; ci++) {
+    _augment(ci, match, new Uint8Array(totalSlots), canUse);
+  }
+
+  if (match.some(m => m === -1)) {
+    // Void constraints unsatisfiable (shouldn't occur in valid states) — plain shuffle.
+    const pool = shuffle(hidden);
+    s.hands[opponent] = [...oppRevealed, ...pool.splice(0, oppHandSize)];
+    for (const { owner, pileIdx, pos } of pileSlots) {
+      s.strawmen[owner]![pileIdx]!.cards[pos] = pool.shift()!;
+    }
+    return s;
+  }
+
+  // ── Write assignments back ─────────────────────────────────────────────────
+
+  // Pinned (known) cards stay; fill remaining hand slots with matched unknowns.
+  s.hands[opponent] = [
+    ...oppRevealed,
+    ...match.slice(0, oppHandSize).map(ci => shuffled[ci]!),
+  ];
+  for (let i = 0; i < pileSlots.length; i++) {
+    const { owner, pileIdx, pos } = pileSlots[i]!;
+    s.strawmen[owner]![pileIdx]!.cards[pos] = shuffled[match[oppHandSize + i]!]!;
   }
 
   return s;
 }
 
 /**
- * Scalar reward for ISMCTS rollouts.
- * Returns the game-point delta for playerIndex from this hand (positive = gained, negative = lost).
- * Uses the actual scoring system so the tree search values bonuses correctly.
+ * Scalar reward for ISMCTS rollouts, normalised to [0, 1] via tanh.
+ * Raw value = actual game-point delta + fractional card-point tiebreaker.
+ * Card-point bonus (±0.2 max) never overrides a real scoring difference (min delta = ±1)
+ * but ensures the tree plays well even in decided positions.
  * Returns null while the hand is in progress.
  */
 function getReward(state: State, playerIndex: number): number | null {
   if (!isHandOver(state)) return null;
-  if (state.declarer === null) return 0;   // misdeal
 
-  const summary = computeHandSummary(state);
-  if (!summary) return 0;
+  // Fractional card-point bonus: breaks ties within the same integer outcome.
+  const myPts       = countCardPoints(state.capturedCards[playerIndex] ?? []);
+  const cardPtBonus = (myPts - 35) / 70 * 0.4;
 
-  const { basicDelta, bonusDelta } = SCORING_SYSTEMS[state.scoring].scoreHand(summary);
-  const totalDelta = basicDelta * state.handMultiplier + bonusDelta;
-  return playerIndex === state.declarer ? totalDelta : -totalDelta;
+  let raw: number;
+  if (state.declarer === null) {
+    const noDecVal = SCORING_SYSTEMS[state.scoring].noDeclarerValue;
+    const base     = myPts > 35 ? noDecVal : myPts < 35 ? -noDecVal : 0;
+    raw = base + cardPtBonus;
+  } else {
+    const summary = computeHandSummary(state);
+    if (!summary) return (Math.tanh(cardPtBonus / REWARD_SCALE) + 1) / 2;
+    const { basicDelta, bonusDelta } = SCORING_SYSTEMS[state.scoring].scoreHand(summary);
+    const totalDelta  = basicDelta * state.handMultiplier + bonusDelta;
+    const signedDelta = playerIndex === state.declarer ? totalDelta : -totalDelta;
+    raw = signedDelta + cardPtBonus;
+  }
+
+  return (Math.tanh(raw / REWARD_SCALE) + 1) / 2;
 }
 
 // ── Exports ───────────────────────────────────────────────────────────────────
@@ -812,7 +1018,7 @@ export {
   // Card utilities
   createDeck, shuffle, cardEquals, cardPointValue, countCardPoints, isTarock,
   // State lifecycle
-  dealState, cloneState,
+  dealState, cloneState, uncoverStrawmenInitial,
   // Queries
   getCurrentPlayer, getLegalMoves, getLegalBids, getLegalAnnouncements,
   isHandOver, isGameOver, getHandResult, computeHandSummary,

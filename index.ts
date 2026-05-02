@@ -6,6 +6,7 @@ import * as engine from './engines/slobberhannes';
 import * as display from './display';
 import * as greedy from './ai/greedy';
 import * as ismcts from './ai/ismcts';
+import * as straw from './engines/strohmandeln';
 
 const NAMES_BY_COUNT: Record<number, string[]> = {
   3: ['You', 'West', 'East'],
@@ -27,7 +28,7 @@ function aiFor(playerIndex: number): AiFn | null {
   };
 }
 
-// ── Hand loop ─────────────────────────────────────────────────────────────────
+// ── Slobberhannes hand loop ────────────────────────────────────────────────────
 
 async function playHand(initialState: State, playerNames: string[]): Promise<State> {
   let state = initialState;
@@ -62,9 +63,9 @@ async function playHand(initialState: State, playerNames: string[]): Promise<Sta
   return state;
 }
 
-// ── Game loop ─────────────────────────────────────────────────────────────────
+// ── Slobberhannes session loop ────────────────────────────────────────────────
 
-async function main(): Promise<void> {
+async function runSlobberhannes(): Promise<void> {
   display.printWelcome();
 
   const playerCount  = await display.askPlayerCount(NAMES_BY_COUNT);
@@ -72,10 +73,6 @@ async function main(): Promise<void> {
 
   let scores  = Array<number>(playerCount).fill(0);
   let handNum = Math.floor(Math.random() * playerCount);
-
-  // ELO ratings — uncomment once elo.updateRatings() is implemented:
-  // import * as elo from './elo';
-  // let ratings = elo.createRatings(playerCount);
 
   while (true) {
     display.printScoreboard(playerNames, scores, engine.DEFAULT_LOSE_AT);
@@ -87,14 +84,336 @@ async function main(): Promise<void> {
     display.printHandSummary(playerNames, state);
     scores = engine.getGameResult(state).scores;
 
-    // ratings = elo.updateRatings(ratings, engine.getGameResult(state));
-
     if (engine.isGameOver(state)) {
       display.printGameOver(playerNames, state);
       break;
     }
 
     handNum++;
+  }
+}
+
+// ── Strohmandeln ──────────────────────────────────────────────────────────────
+
+const STRAW_NAMES = ['You', 'Opponent'];
+
+const A = {
+  reset:  '\x1b[0m',
+  bold:   '\x1b[1m',
+  dim:    '\x1b[2m',
+  yellow: '\x1b[33m',
+};
+
+function hr(len = 50): string { return '─'.repeat(len); }
+
+function printStrawWelcome(): void {
+  console.log(`\n${A.bold}╔════════════════════════════════════╗`);
+  console.log(      `║    S T R O H M A N D E L N        ║`);
+  console.log(      `╚════════════════════════════════════╝${A.reset}`);
+  console.log('\n2-player Austrian Tarock with a 54-card deck.');
+  console.log('Each player gets 15 hand cards + 3 strawman piles of 4 (face-down except the top).');
+  console.log('Bid to become declarer. Score 36+ card points to win the hand.');
+  console.log('Scoring: Beck system (win=+2, draw=0, loss=−3; doubled after a draw).\n');
+}
+
+function printStrawScoreboard(scores: number[], multiplier: number, dealerIndex: number): void {
+  console.log(`\n${A.bold}Scores${A.reset}  You: ${scores[0] ?? 0}   Opponent: ${scores[1] ?? 0}`);
+  console.log(`Dealer: ${STRAW_NAMES[dealerIndex]}${multiplier > 1 ? `   ${A.yellow}Hand multiplier: ×${multiplier}${A.reset}` : ''}`);
+}
+
+/** Show pile tops and full hand during bidding (no trick in progress yet). */
+function printStrawBidView(state: straw.State, names: string[]): void {
+  const oppPiles = (state.strawmen[1] ?? []).map(_pileCell).join('   ');
+  console.log(`  ${(names[1] ?? 'Opp').padEnd(8)} piles:  ${oppPiles}`);
+
+  const myPiles = (state.strawmen[0] ?? []).map(_pileCell).join('   ');
+  console.log(`  ${(names[0] ?? 'You').padEnd(8)} piles:  ${myPiles}`);
+
+  const hand = [...(state.hands[0] ?? [])].sort(strawCardSort);
+  console.log(`  Your hand:       ${hand.map(c => display.cardStr(c)).join('  ')}`);
+}
+
+async function askStrawBid(state: straw.State, names: string[], isForehand: boolean): Promise<'play' | 'pass'> {
+  printStrawBidView(state, names);
+  const role = isForehand ? 'forehand' : 'dealer';
+  console.log(`\n  You are ${A.bold}${role}${A.reset}. Do you want to be declarer?`);
+  console.log('  [1] Play (become declarer)');
+  console.log('  [2] Pass');
+  while (true) {
+    const raw = await display.ask('  Your bid [1/2]: ');
+    if (raw.trim() === '1') return 'play';
+    if (raw.trim() === '2') return 'pass';
+    console.log('  Enter 1 or 2.');
+  }
+}
+
+// Sort keys derived from the engine's exported rank arrays (computed once).
+const _tOrd = new Map<string, number>([...straw.TAROCK_RANKS].reverse().map((r, i) => [r, i]));
+const _bOrd = new Map<string, number>([...straw.BLACK_RANKS].reverse().map((r, i) => [r, i]));
+const _rOrd = new Map<string, number>([...straw.RED_RANKS].reverse().map((r, i) => [r, i]));
+const _sOrd = new Map<string, number>([['T', 0], ['♣', 1], ['♠', 2], ['♥', 3], ['♦', 4]]);
+
+function strawCardSort(a: Card, b: Card): number {
+  const sd = (_sOrd.get(a.suit) ?? 5) - (_sOrd.get(b.suit) ?? 5);
+  if (sd !== 0) return sd;
+  if (a.suit === 'T') return (_tOrd.get(b.rank) ?? 0) - (_tOrd.get(a.rank) ?? 0);
+  const ord = (a.suit === '♣' || a.suit === '♠') ? _bOrd : _rOrd;
+  return (ord.get(b.rank) ?? 0) - (ord.get(a.rank) ?? 0);
+}
+
+/** One pile cell: top card + remaining count if > 1, or em-dash if empty. */
+function _pileCell(p: straw.StrawmanPile, i: number): string {
+  if (p.cards.length === 0) return `P${i + 1}: ${A.dim}—${A.reset}`;
+  const top   = p.cards[p.cards.length - 1]!;
+  const count = p.cards.length > 1 ? `${A.dim}×${p.cards.length}${A.reset}` : '';
+  return `P${i + 1}:${display.cardStr(top)}${count}`;
+}
+
+/**
+ * Full board display for the human's turn.
+ * Shows opponent pile tops, the current trick, the player's own pile tops,
+ * and the player's full hand (legal plays lit, illegal plays dimmed).
+ */
+function printStrawBoard(state: straw.State, names: string[]): void {
+  const legalKeys = new Set(straw.getLegalMoves(state).map(c => `${c.rank}${c.suit}`));
+
+  // Opponent pile tops
+  const oppPiles = (state.strawmen[1] ?? []).map(_pileCell).join('   ');
+  console.log(`  ${(names[1] ?? 'Opp').padEnd(8)} piles:  ${oppPiles}`);
+
+  // Current trick (or lead prompt)
+  if (state.currentTrick.length > 0) {
+    const entries = state.currentTrick.map(p =>
+      `${names[p.playerIndex] ?? `P${p.playerIndex}`}: ${display.cardStr(p.card)}`);
+    console.log(`  Table:           ${entries.join('   ')}`);
+  } else {
+    console.log(`  Table:           ${A.dim}(you lead)${A.reset}`);
+  }
+
+  // Player's own pile tops
+  const myPiles = (state.strawmen[0] ?? []).map(_pileCell).join('   ');
+  console.log(`  ${(names[0] ?? 'You').padEnd(8)} piles:  ${myPiles}`);
+
+  // Player's full hand: legal = normal colour, illegal = dimmed
+  const hand = [...(state.hands[0] ?? [])].sort(strawCardSort);
+  const handStr = hand.map(c =>
+    legalKeys.has(`${c.rank}${c.suit}`)
+      ? display.cardStr(c)
+      : `${A.dim}${c.rank}${c.suit}${A.reset}`
+  ).join('  ');
+  console.log(`  Your hand:       ${handStr}`);
+}
+
+/** Prompt the human to pick one of the currently-legal cards. */
+async function askStrawCard(state: straw.State): Promise<Card> {
+  if (state.pendingAnnouncement !== null) {
+    console.log(`  ${A.yellow}Must play a ${state.pendingAnnouncement} card.${A.reset}`);
+  }
+
+  const legal = [...straw.getLegalMoves(state)].sort(strawCardSort);
+  const parts = legal.map((c, i) => `[${i + 1}] ${display.cardStr(c)}`);
+  console.log(`  Play:            ${parts.join('   ')}`);
+
+  while (true) {
+    const raw = await display.ask(`  Your move [1-${legal.length}]: `);
+    const idx = parseInt(raw, 10) - 1;
+    if (idx >= 0 && idx < legal.length) return legal[idx]!;
+    console.log(`  Enter a number 1–${legal.length}.`);
+  }
+}
+
+import type { BareEvent } from './types';
+
+/**
+ * Print any CARD_REVEALED and CARDS_MOVED pile-events from a batch of events.
+ * Called after initial uncovering and after each card-play move.
+ */
+function printPileEvents(events: BareEvent[], names: string[]): void {
+  for (const ev of events) {
+    if (ev.type === 'CARD_REVEALED') {
+      const pName = names[ev.player] ?? `P${ev.player}`;
+      console.log(`  ${A.yellow}${pName} P${ev.pile + 1}: ${display.cardStr(ev.card)} revealed → hand${A.reset}`);
+    } else if (ev.type === 'CARDS_MOVED') {
+      for (const t of ev.transfers) {
+        const from = t.from;
+        if (from.zone !== 'strawman') continue;
+        const pName = names[from.player] ?? `P${from.player}`;
+        if (ev.reason === 'bottom-to-hand') {
+          console.log(`  ${pName} P${from.pile + 1}: bottom card → hand (face-down)`);
+        }
+        // tarock-or-king CARDS_MOVED is already reported by the preceding CARD_REVEALED
+      }
+    }
+  }
+}
+
+/** AI picks a random legal move (card play). */
+function strawAiPickCard(state: straw.State): Card {
+  const legal = straw.getLegalMoves(state);
+  return legal[Math.floor(Math.random() * legal.length)]!;
+}
+
+async function playStrohmandelnHand(
+  initialState: straw.State,
+  names: string[],
+): Promise<straw.State> {
+  // ── Initial strawman uncovering (before bidding) ──
+  const { state: uncoveredState, events: uncoverEvents } = straw.uncoverStrawmenInitial(initialState);
+  let state = uncoveredState;
+  console.log('\n  ── Strawman uncovering ──');
+  printPileEvents(uncoverEvents, names);
+
+  // ── Bidding ──
+  while (state.phase === 'bidding') {
+    const pi = straw.getCurrentPlayer(state);
+    const isForehand = pi !== state.dealerIndex;
+
+    if (pi === 0) {
+      const bid = await askStrawBid(state, names, isForehand);
+      ({ state } = straw.applyMove(state, bid === 'play'
+        ? { type: 'MAKE_BID', bid: 'play' }
+        : { type: 'PASS_BID' }));
+    } else {
+      // AI always bids "play"
+      const role = isForehand ? 'forehand' : 'dealer';
+      console.log(`\n  ${names[pi]} (${role}) bids: ${A.bold}Play${A.reset}`);
+      ({ state } = straw.applyMove(state, { type: 'MAKE_BID', bid: 'play' }));
+    }
+  }
+
+  if (state.declarer === null) {
+    console.log(`\n  Both passed — no declarer. Playing for no stakes; eldest leads.`);
+  } else {
+    const declarerName = names[state.declarer] ?? `Player ${state.declarer}`;
+    console.log(`\n  ${A.bold}${declarerName}${A.reset} is the declarer. Need 36+ card points to win.`);
+  }
+
+  // ── Playing ──
+  while (!straw.isHandOver(state)) {
+    const pi = straw.getCurrentPlayer(state);
+
+    if (state.currentTrick.length === 0) {
+      console.log(`\n${hr()}`);
+      console.log(`  Trick ${state.trickNum + 1} of ${straw.TRICKS_PER_HAND}   Leader: ${A.bold}${names[state.leader]}${A.reset}`);
+      console.log(hr());
+    }
+
+    let playEvents: BareEvent[] = [];
+
+    if (pi === 0) {
+      printStrawBoard(state, names);
+
+      // Offer announcements (Beck only, when leading)
+      if (state.scoring === 'Beck') {
+        const annMoves = straw.getLegalAnnouncements(state);
+        for (const ann of annMoves) {
+          if (ann.type !== 'MAKE_ANNOUNCEMENT') continue;
+          const raw = await display.ask(`  Announce ${A.bold}${ann.announcement}${A.reset}? [y/N]: `);
+          if (raw.trim().toLowerCase() === 'y') {
+            ({ state } = straw.applyMove(state, ann));
+            console.log(`  ${A.yellow}You announce: ${ann.announcement}!${A.reset}`);
+          }
+        }
+      }
+
+      const card = await askStrawCard(state);
+      ({ state, events: playEvents } = straw.applyMove(state, { type: 'PLAY_CARD', card }));
+    } else {
+      // AI: play card
+      const card = strawAiPickCard(state);
+      console.log(`  ${names[pi]} plays: ${display.cardStr(card)}`);
+      ({ state, events: playEvents } = straw.applyMove(state, { type: 'PLAY_CARD', card }));
+    }
+
+    printPileEvents(playEvents, names);
+
+    // Show trick result when the trick is just completed
+    if (state.currentTrick.length === 0 && state.trickLog.length > 0) {
+      const last = state.trickLog.at(-1)!;
+      console.log(`\n  ${A.bold}${names[last.winner]}${A.reset} wins the trick.`);
+    }
+  }
+
+  // ── Hand summary ──
+  const result   = straw.getHandResult(state);
+  const summary  = straw.computeHandSummary(state);
+  console.log(`\n${A.bold}Hand result${A.reset}`);
+
+  if (result && summary && state.declarer !== null) {
+    const sys  = straw.SCORING_SYSTEMS[state.scoring];
+    const { basicDelta, bonusDelta } = sys.scoreHand(summary);
+    const total = basicDelta * state.handMultiplier + bonusDelta;
+    const d   = state.declarer;
+    const def = 1 - d;
+
+    console.log(`  ${(names[d] ?? '?').padEnd(8)} (declarer): ${result.declarerPoints} card pts`);
+    console.log(`  ${(names[def] ?? '?').padEnd(8)} (defender): ${result.defenderPoints} card pts`);
+
+    if (state.handMultiplier > 1) {
+      console.log(`  Basic delta ×${state.handMultiplier} (carry-over multiplier)`);
+    }
+    const sign = (n: number) => n > 0 ? `+${n}` : `${n}`;
+    console.log(`  Game points:  ${names[d]}: ${A.yellow}${sign(total)}${A.reset}   ${names[def]}: ${A.yellow}${sign(-total)}${A.reset}`);
+    if (basicDelta === 0) console.log(`  ${A.yellow}Draw — next hand is doubled.${A.reset}`);
+  } else {
+    console.log('  No scoring — neither player bid.');
+  }
+
+  console.log(`\n  Running totals:  You: ${state.scores[0]}   Opponent: ${state.scores[1]}`);
+  return state;
+}
+
+async function runStrohmandeln(): Promise<void> {
+  printStrawWelcome();
+
+  let scores: number[]  = [0, 0];
+  let dealerIndex       = Math.random() < 0.5 ? 0 : 1;
+  let handMultiplier    = 1;
+
+  while (true) {
+    printStrawScoreboard(scores, handMultiplier, dealerIndex);
+    await display.askContinue();
+
+    const initialState = straw.dealState({
+      scores,
+      dealerIndex,
+      scoring:       'Beck',
+      handMultiplier,
+    });
+
+    const finalState = await playStrohmandelnHand(initialState, STRAW_NAMES);
+
+    scores         = [...finalState.scores];
+    handMultiplier = finalState.nextHandMultiplier;
+    dealerIndex    = 1 - dealerIndex;
+
+    await display.askContinue('Play another hand? Press Enter to continue, or Ctrl+C to quit...');
+  }
+}
+
+// ── Game selector ─────────────────────────────────────────────────────────────
+
+async function askGame(): Promise<'slobberhannes' | 'strohmandeln'> {
+  console.log(`\n${A.bold}Which game?${A.reset}`);
+  console.log('  [1]  Slobberhannes  (3–6 players, avoid tricks)');
+  console.log('  [2]  Strohmandeln   (2 players, Austrian Tarock)');
+  while (true) {
+    const raw = await display.ask('\nChoice [1/2]: ');
+    if (raw.trim() === '1') return 'slobberhannes';
+    if (raw.trim() === '2') return 'strohmandeln';
+    console.log('  Enter 1 or 2.');
+  }
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
+
+async function main(): Promise<void> {
+  const game = await askGame();
+
+  if (game === 'strohmandeln') {
+    await runStrohmandeln();
+  } else {
+    await runSlobberhannes();
   }
 
   display.close();
