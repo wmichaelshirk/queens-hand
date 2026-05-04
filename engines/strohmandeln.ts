@@ -1,4 +1,101 @@
 import type { Card, BareEvent, EngineResult, Move } from '../types';
+import type { ISMCTSEngine } from '../lib/engine';
+import { bipartiteMatch } from '../lib/matching';
+
+/*
+ * STROHMANDELN — 2-player Austrian Tarock — Rules as implemented
+ * Sources: Mayr & Sedlaczek (2008); Furr (2009); McLeod, J. (pagat.com/tarot/stroh.html).
+ * ────────────────────────────────────────────────────────────────────────────────
+ *
+ * DECK  (54 cards)
+ *   Tarocks / trumps (high → low):
+ *     Sküs (★), Mond (XXI), XX … II, Pagat (I).   22 cards total.
+ *   Black suits ♣ ♠ (high → low):  K Q Kn J 10 9 8 7.
+ *   Red suits   ♥ ♦ (high → low):  K Q Kn J A 2 3 4.
+ *
+ * DEAL  (forehand = 1 − dealerIndex; packets dealt forehand-first)
+ *   Hand:     3 packets of 5 cards  → 15 hand cards per player.
+ *   Strawman: 3 piles  of 4 cards   → 12 pile cards per player (face-down).
+ *   After dealing, each pile's top card is face-up.  Initial uncovering:
+ *     Tarock or King on top → immediately transferred to owner's hand (public,
+ *     CARD_REVEALED + CARDS_MOVED); cascades until a normal suit card stops it.
+ *     The bottom card of a pile only enters the hand when it becomes the last
+ *     remaining card in that pile (CARDS_MOVED, reason 'bottom-to-hand').
+ *
+ * BIDDING
+ *   Forehand bids first.  Each player may bid 'play' (MAKE_BID) or PASS_BID.
+ *   The first player to bid 'play' becomes the declarer; play phase begins.
+ *   If both pass: hand is played without a declarer (no-bid hand; smaller stakes).
+ *
+ * TRICK-PLAY  (Farbzwang — compulsory-follow rules)
+ *   1. Must follow the led suit if able.
+ *   2. If void in led suit, must play a Tarock.
+ *   3. If void in both, may play any card.
+ *   Trick won by: the highest Tarock played; or, if no Tarock, the highest card
+ *   of the led suit.  Off-suit non-Tarock cards cannot win.
+ *   When a pile top is played, the newly exposed card is processed:
+ *     Tarock or King → cascades to hand (public); normal suit card → new pile top.
+ *
+ * CARD POINTS  (both players' totals always sum to 70)
+ *   Trull (★, XXI, I): 4 pts each.  Kings: 4 pts each.
+ *   Queens: 3 pts.  Knights (Kn): 2 pts.  Jacks: 1 pt.  All others: 0 pts.
+ *   Counting: Σ(individual values) + floor((n+1)/3) for n cards captured.
+ *     Groups of 3 contribute +1; a leftover pair also contributes +1;
+ *     a single leftover card contributes nothing.
+ *
+ * WINNING CONDITION
+ *   Declarer must capture ≥ 36 card points (out of 70) to win the hand.
+ *   Exactly 35 each = LOSS for the declarer (35 is not a draw when there is a declarer).
+ *   No-bid hand: whoever captures more card points wins noDeclarerValue × multiplier.
+ *   No-bid draw (35–35): multiplier doubles for the next round (2 hands); no score transfer.
+ *
+ * HAND MULTIPLIER
+ *   Starts at 1.  Only a no-bid 35–35 draw triggers doubling; the multiplier
+ *   applies for the next round (2 hands) and does not compound (a second no-bid
+ *   draw refreshes the 2-hand window rather than stacking).
+ *   Any decisive result resets it to 1.
+ *   The multiplier applies to the entire score (basic delta + bonuses).
+ *
+ * SCORING SYSTEMS  (select via DealConfig.scoring)
+ *
+ *   Beck (1972) — default:
+ *     Win: +2.  Loss: −3.  No-bid winner: +1.
+ *     Bonuses (±1): Pagat Ultimo, Trull announcement, Royal Trull announcement.
+ *     Trull/Royal Trull must be announced at lead time; the announcer must then
+ *     immediately play a qualifying card (Trull card or King respectively).
+ *     Trull = hold all three of {★, XXI, I} accessible (hand + pile tops).
+ *     Royal Trull = hold all four Kings accessible.
+ *
+ *   Furr (2009):
+ *     Win: +3; Major win (declarer ≥ 45 pts): +4.
+ *     Loss: −4; Major loss (defender ≥ 44 pts): −5.  No-bid winner: +2.
+ *     Bonuses (±1): Pagat Ultimo, Uhu, Kakadu, Mond Fang, Trull, Royal Trull.
+ *     Bonus (±12): Valat (win all 27 tricks); replaces game value, Major Win,
+ *                  Trull, and Royal Trull — Mond Fang and birds still score.
+ *     Trull/Royal Trull: awarded to whoever captures all required cards.
+ *     ⚠  NOT IMPLEMENTED: Rostopschin (±1) — Tarocks VII and VIII played in
+ *        consecutive tricks.  Appears in Furr (2009) but not yet coded.
+ *
+ *   Mayr & Sedlaczek (2008):
+ *     Win: +3.  Loss: −4.  No-bid winner: +2.
+ *     Bonuses: same as Furr (excluding Rostopschin), plus Quapil (±1, win 4th-from-last trick with IV).
+ *     No Major Win tier.  No Rostopschin.
+ *
+ * BONUS REFERENCE
+ *   Pagat Ultimo  (±1): win the last trick        with Tarock I.
+ *   Uhu           (±1): win the penultimate trick  with Tarock II.
+ *   Kakadu        (±1): win the antepenultimate    with Tarock III.
+ *   Quapil        (±1): win the 4th-from-last      with Tarock IV.  [Mayr only]
+ *   Valat         (±12): win all 27 tricks.  Replaces game value, Major Win,
+ *                        Trull, and Royal Trull; Mond Fang and birds still apply.
+ *   Mond Fang     (±1): capture Mond (XXI) in a trick that also contains Sküs (★).
+ *   Trull         (±1): capture (or announce, in Beck) all of {★, XXI, I}.
+ *   Royal Trull   (±1): capture (or announce, in Beck) all four Kings.
+ *
+ * SESSION
+ *   Strohmandeln has no fixed end condition.  The session layer asks players
+ *   after each hand_over whether to continue (isGameOver always returns false).
+ */
 
 // ── Tarock deck constants ──────────────────────────────────────────────────────
 
@@ -37,13 +134,12 @@ function cardPointValue(card: Card): number {
 }
 
 /**
- * Standard Austrian tarock point counting is group cards in threes, deduct 2 per group.
- * But we will use the "original" system since it's more straightforward:
- * Add the card points, + 1 point per 3 cards.
- * The two players' counts sum to exactly 70.
+ * Austrian Tarock card-point counting: Σ(individual values) + floor((n+1)/3) for n cards.
+ * Groups of 3 contribute +1; a leftover pair also contributes +1; a lone card contributes 0.
+ * With 2-card tricks the two players' counts always sum to 70.
  */
 function countCardPoints(cards: Card[]): number {
-  const groups = Math.floor(cards.length / 3);
+  const groups = Math.floor((cards.length + 1) / 3);
   return cards.reduce((sum, c) => sum + cardPointValue(c), 0) + groups;
 }
 
@@ -117,8 +213,8 @@ export interface HandSummary {
 }
 
 /**
- * A scoring system returns the basic game value and bonus value separately so the
- * draw-doubling multiplier can be applied to basic only (bonuses are never doubled).
+ * A scoring system returns basicDelta and bonusDelta separately.
+ * The hand multiplier is applied to (basicDelta + bonusDelta) together.
  * Both values are from the declarer's perspective; defenderDelta = −declarerDelta.
  */
 export interface ScoringSystem {
@@ -144,9 +240,7 @@ const BECK: ScoringSystem = {
   name:            'Beck',
   noDeclarerValue: 1,
   scoreHand(s) {
-    const basicDelta = s.declarerCardPoints >= DECLARER_WINS_AT ? 2
-                     : s.declarerCardPoints === DECLARER_WINS_AT - 1 ? 0
-                     : -3;
+    const basicDelta = s.declarerCardPoints >= DECLARER_WINS_AT ? 2 : -3;
     const bonusDelta = _bonus(s.pagatUltimoWinner, s.declarer, 1)
                      + _bonus(s.trullWinner,        s.declarer, 1)
                      + _bonus(s.royalTrullWinner,   s.declarer, 1);
@@ -158,11 +252,17 @@ function _furrMayrBonuses(s: HandSummary): number {
   return _bonus(s.pagatUltimoWinner, s.declarer, 1)
        + _bonus(s.uhuWinner,         s.declarer, 1)
        + _bonus(s.kakaduWinner,      s.declarer, 1)
-       + _bonus(s.valatWinner,       s.declarer, 12)
        + _bonus(s.mondFangWinner,    s.declarer, 1)
        + _bonus(s.trullWinner,       s.declarer, 1)
        + _bonus(s.royalTrullWinner,  s.declarer, 1);
-  // TODO: Rostopschin (Tarocks VII and VIII played in consecutive tricks) ±1
+}
+
+function _valatBonuses(s: HandSummary, includeQuapil = false): number {
+  return _bonus(s.pagatUltimoWinner, s.declarer, 1)
+       + _bonus(s.uhuWinner,         s.declarer, 1)
+       + _bonus(s.kakaduWinner,      s.declarer, 1)
+       + _bonus(s.mondFangWinner,    s.declarer, 1)
+       + (includeQuapil ? _bonus(s.quapilWinner, s.declarer, 1) : 0);
 }
 
 /**
@@ -174,11 +274,14 @@ const FURR: ScoringSystem = {
   name:            'Furr',
   noDeclarerValue: 2,
   scoreHand(s) {
+    if (s.valatWinner !== null) {
+      return { basicDelta: _bonus(s.valatWinner, s.declarer, 12), bonusDelta: _valatBonuses(s) };
+    }
     const declarerWon = s.declarerCardPoints >= DECLARER_WINS_AT;
-    const basicDelta  = s.declarerCardPoints === DECLARER_WINS_AT - 1 ? 0
-                      : declarerWon
+    const basicDelta  = declarerWon
                           ? (s.declarerCardPoints >= DECLARER_MAJOR_WIN_AT ? 4 : 3)
                           : (s.defenderCardPoints >= DEFENDER_MAJOR_WIN_AT ? -5 : -4);
+    // TODO: Rostopschin (±1) — Tarocks VII and VIII played in consecutive tricks.
     return { basicDelta, bonusDelta: _furrMayrBonuses(s) };
   },
 };
@@ -191,9 +294,10 @@ const MAYR: ScoringSystem = {
   name:            'Mayr',
   noDeclarerValue: 2,
   scoreHand(s) {
-    const basicDelta  = s.declarerCardPoints >= DECLARER_WINS_AT ? 3
-                     : s.declarerCardPoints === DECLARER_WINS_AT - 1 ? 0
-                     : -4;
+    if (s.valatWinner !== null) {
+      return { basicDelta: _bonus(s.valatWinner, s.declarer, 12), bonusDelta: _valatBonuses(s, true) };
+    }
+    const basicDelta  = s.declarerCardPoints >= DECLARER_WINS_AT ? 3 : -4;
     const bonusDelta  = _furrMayrBonuses(s)
                       + _bonus(s.quapilWinner, s.declarer, 1);
     return { basicDelta, bonusDelta };
@@ -225,7 +329,7 @@ export interface State {
   trickNum:           number;
   announcements:      Announcement[];    // announcements made this hand (Trull, RoyalTrull)
   pendingAnnouncement: string | null;    // if set, current player must play a card from this set
-  handMultiplier:     number;            // basic game multiplier for this hand (2 after a draw)
+  handMultiplier:     number;            // score multiplier for this hand (set from nextHandMultiplier at deal time)
   nextHandMultiplier: number;            // multiplier the session should pass to the next dealState
   revealedInHand:     Card[][];          // per-player cards in hand publicly seen by both players
   // No targetScore — Strohmandeln is played for a hard score with no fixed session length.
@@ -414,20 +518,16 @@ function _getLegalCards(state: State): Card[] {
  *   - terminal → []
  */
 function getLegalMoves(state: State): Move[] {
-  if (state.phase === 'bidding') return getLegalBids(state);
+  if (state.phase === 'bidding') return _getLegalBids(state);
   if (state.phase === 'playing') {
-    const annMoves  = getLegalAnnouncements(state);
+    const annMoves  = _getLegalAnnouncements(state);
     const cardMoves = _getLegalCards(state).map(card => ({ type: 'PLAY_CARD' as const, card }));
     return [...annMoves, ...cardMoves];
   }
   return [];
 }
 
-/**
- * Legal bid moves for the current player during the bidding phase.
- * Both players always have the option to play or pass.
- */
-function getLegalBids(state: State): Move[] {
+function _getLegalBids(state: State): Move[] {
   if (state.phase !== 'bidding') return [];
   return [
     { type: 'MAKE_BID', bid: 'play' },
@@ -435,18 +535,13 @@ function getLegalBids(state: State): Move[] {
   ];
 }
 
-/**
- * Announcement moves available to the current player.
- * Only available when leading (pendingAnnouncement is null, currentTrick is empty)
- * and the player holds all required cards and has not yet made that announcement.
- */
-function getLegalAnnouncements(state: State): Move[] {
+function _getLegalAnnouncements(state: State): Move[] {
   if (state.phase !== 'playing') return [];
   if (state.scoring !== 'Beck') return [];
   if (state.pendingAnnouncement !== null) return [];
   if (state.currentTrick.length !== 0) return [];
 
-  const pi      = getCurrentPlayer(state);
+  const pi       = getCurrentPlayer(state);
   const playable = _playableCards(state, pi);
   const moves: Move[] = [];
 
@@ -592,9 +687,8 @@ function _removePlayedCard(s: State, pi: number, card: Card): number | 'hand' | 
  *   • Last card in pile (length === 1) → CARDS_MOVED to hand without being revealed.
  *   • Any other suit card → stays face-up as the new playable pile top (stop).
  */
-function _uncoverPile(s: State, pi: number, pileIdx: number, events: BareEvent[]): void {
+function _uncoverPile(s: State, pi: number, pileIdx: number, events: BareEvent[], simulate: boolean): void {
   const pile = s.strawmen[pi]![pileIdx]!;
-  const loc  = { zone: 'strawman' as const, player: pi, pile: pileIdx };
 
   while (true) {
     if (pile.cards.length === 0) break;
@@ -602,38 +696,31 @@ function _uncoverPile(s: State, pi: number, pileIdx: number, events: BareEvent[]
     if (pile.cards.length === 1) {
       const card = pile.cards.pop()!;
       s.hands[pi]!.push(card);
-      events.push({ type: 'CARDS_MOVED', transfers: [{ card, from: loc, to: { zone: 'hand', player: pi } }], reason: 'bottom-to-hand' });
+      if (!simulate) events.push({
+        type: 'CARDS_MOVED',
+        transfers: [{ card, from: { zone: 'strawman', player: pi, pile: pileIdx }, to: { zone: 'hand', player: pi } }],
+        reason: 'bottom-to-hand',
+      });
       break;
     }
 
     const top = pile.cards[pile.cards.length - 1]!;
     if (isTarock(top) || top.rank === 'K') {
-      events.push({ type: 'CARD_REVEALED', player: pi, pile: pileIdx, card: top });
+      if (!simulate) events.push({ type: 'CARD_REVEALED', player: pi, pile: pileIdx, card: top });
       pile.cards.pop();
       s.hands[pi]!.push(top);
       s.revealedInHand[pi]!.push(top);
-      events.push({ type: 'CARDS_MOVED', transfers: [{ card: top, from: loc, to: { zone: 'hand', player: pi } }], reason: 'tarock-or-king' });
-      // Loop: check whether the card beneath is also a T/K, or if the pile hit 1.
+      if (!simulate) events.push({
+        type: 'CARDS_MOVED',
+        transfers: [{ card: top, from: { zone: 'strawman', player: pi, pile: pileIdx }, to: { zone: 'hand', player: pi } }],
+        reason: 'tarock-or-king',
+      });
     } else {
       break;
     }
   }
 }
 
-/**
- * Process the initial strawman uncovering for both players (called once after dealing,
- * before bidding begins).
- *
- * For each pile (left-to-right per player):
- *   1. If the face-up top is a Tarock or King, it is "set aside" (CARD_REVEALED) and
- *      will be added to the player's hand after all piles are processed so the opponent
- *      can view it during that window.
- *   2. The bottom card is transferred to the player's hand immediately, face-down
- *      (CARDS_MOVED, reason 'bottom-to-hand' — no preceding CARD_REVEALED).
- *
- * After all piles: set-aside T/K cards are moved to hand (CARDS_MOVED, reason 'tarock-or-king').
- * No intra-pile cascade is triggered here; cascades only occur during play via _uncoverPile.
- */
 /**
  * Process the initial strawman uncovering for both players (called once after dealing,
  * before bidding begins). Each pile is processed left-to-right via _uncoverPile:
@@ -648,7 +735,7 @@ function uncoverStrawmenInitial(state: State): EngineResult<State> {
 
   for (let pi = 0; pi < PLAYER_COUNT; pi++) {
     for (let pileIdx = 0; pileIdx < STRAWMAN_PILE_COUNT; pileIdx++) {
-      _uncoverPile(s, pi, pileIdx, events);
+      _uncoverPile(s, pi, pileIdx, events, false);
     }
   }
 
@@ -656,35 +743,34 @@ function uncoverStrawmenInitial(state: State): EngineResult<State> {
 }
 
 /**
- * Apply handMultiplier to the basic game delta; bonuses are never doubled.
- * Also sets nextHandMultiplier: 2 on a draw (35–35), 1 otherwise.
+ * Apply handMultiplier to the entire score (basic + bonuses) and reset multiplier to 1.
+ * The no-bid draw path sets nextHandMultiplier; declared hands always clear it.
  */
 function _gamePointsForHand(s: State): { declarerDelta: number; defenderDelta: number } {
   const summary = computeHandSummary(s);
   if (!summary) return { declarerDelta: 0, defenderDelta: 0 };
 
   const { basicDelta, bonusDelta } = SCORING_SYSTEMS[s.scoring].scoreHand(summary);
-  const totalDelta = basicDelta * s.handMultiplier + bonusDelta;
+  const totalDelta = (basicDelta + bonusDelta) * s.handMultiplier;
 
-  // Set multiplier for the next hand: draw doubles it; any other result resets it.
-  s.nextHandMultiplier = basicDelta === 0 ? 2 : 1;
+  s.nextHandMultiplier = 1;
 
   return { declarerDelta: totalDelta, defenderDelta: -totalDelta };
 }
 
 // ── Transitions ───────────────────────────────────────────────────────────────
 
-function applyMove(state: State, move: Move): EngineResult<State> {
-  if (state.phase === 'bidding') return _applyBid(state, move);
+function applyMove(state: State, move: Move, simulate = false): EngineResult<State> {
+  if (state.phase === 'bidding') return _applyBid(state, move, simulate);
   if (state.phase === 'playing') {
-    if (move.type === 'MAKE_ANNOUNCEMENT') return _applyAnnouncement(state, move.announcement);
-    if (move.type === 'PLAY_CARD')         return _applyCardPlay(state, move.card);
+    if (move.type === 'MAKE_ANNOUNCEMENT') return _applyAnnouncement(state, move.announcement, simulate);
+    if (move.type === 'PLAY_CARD')         return _applyCardPlay(state, move.card, simulate);
     throw new Error(`Unexpected move type during playing phase: ${move.type}`);
   }
   throw new Error(`applyMove called in terminal phase: ${state.phase}`);
 }
 
-function _applyBid(state: State, move: Move): EngineResult<State> {
+function _applyBid(state: State, move: Move, simulate: boolean): EngineResult<State> {
   if (move.type !== 'MAKE_BID' && move.type !== 'PASS_BID') {
     throw new Error('Expected MAKE_BID or PASS_BID during bidding phase');
   }
@@ -693,17 +779,15 @@ function _applyBid(state: State, move: Move): EngineResult<State> {
   const events: BareEvent[] = [];
 
   if (move.type === 'MAKE_BID') {
-    events.push({ type: 'BID_MADE', player: pi, bid: 'play' });
+    if (!simulate) events.push({ type: 'BID_MADE', player: pi, bid: 'play' });
     s.declarer = pi;
     s.phase    = 'playing';
-    events.push({ type: 'CONTRACT_SET', declarer: pi, contract: 'play' });
+    if (!simulate) events.push({ type: 'CONTRACT_SET', declarer: pi, contract: 'play' });
   } else {
-    events.push({ type: 'BID_PASSED', player: pi });
+    if (!simulate) events.push({ type: 'BID_PASSED', player: pi });
     if (pi !== s.dealerIndex) {
-      // Forehand passed; dealer gets their chance.
       s.bidder = s.dealerIndex;
     } else {
-      // Both passed — no declarer. Hand is still played; eldest leads as always.
       s.declarer = null;
       s.phase    = 'playing';
     }
@@ -717,7 +801,7 @@ function _applyBid(state: State, move: Move): EngineResult<State> {
  * The bonus is deferred to end-of-hand (stored in state.announcements).
  * After announcing, the player still leads — but must play a card from the declared set.
  */
-function _applyAnnouncement(state: State, announcement: string): EngineResult<State> {
+function _applyAnnouncement(state: State, announcement: string, simulate: boolean): EngineResult<State> {
   const pi = getCurrentPlayer(state);
   if (state.currentTrick.length !== 0) {
     throw new Error('Announcements can only be made when leading');
@@ -733,14 +817,13 @@ function _applyAnnouncement(state: State, announcement: string): EngineResult<St
   s.announcements.push({ name: announcement, player: pi });
   s.pendingAnnouncement = announcement;
 
-  const events: BareEvent[] = [
-    { type: 'ANNOUNCEMENT_MADE', player: pi, announcement },
-  ];
+  const events: BareEvent[] = [];
+  if (!simulate) events.push({ type: 'ANNOUNCEMENT_MADE', player: pi, announcement });
 
   return { state: s, events };
 }
 
-function _applyCardPlay(state: State, card: Card): EngineResult<State> {
+function _applyCardPlay(state: State, card: Card, simulate: boolean): EngineResult<State> {
   const s      = cloneState(state);
   const pi     = getCurrentPlayer(s);
   const events: BareEvent[] = [];
@@ -750,14 +833,13 @@ function _applyCardPlay(state: State, card: Card): EngineResult<State> {
     throw new Error(`Card ${JSON.stringify(card)} not available for player ${pi}`);
   }
   if (typeof removedFrom === 'number') {
-    _uncoverPile(s, pi, removedFrom, events);
+    _uncoverPile(s, pi, removedFrom, events, simulate);
   }
 
-  // Clear pendingAnnouncement once the required card has been played.
   if (s.pendingAnnouncement !== null) s.pendingAnnouncement = null;
 
   s.currentTrick.push({ playerIndex: pi, card: { ...card } });
-  events.push({ type: 'CARD_PLAYED', player: pi, card: { ...card } });
+  if (!simulate) events.push({ type: 'CARD_PLAYED', player: pi, card: { ...card } });
 
   if (s.currentTrick.length === PLAYER_COUNT) {
     const ledSuit = s.currentTrick[0]!.card.suit;
@@ -766,15 +848,17 @@ function _applyCardPlay(state: State, card: Card): EngineResult<State> {
     for (const { card: c } of s.currentTrick) s.capturedCards[winner]!.push(c);
     s.trickLog.push({ plays: [...s.currentTrick], ledSuit, winner });
 
-    events.push({
-      type:      'TRICK_RESOLVED',
-      winner,
-      transfers: s.currentTrick.map(p => ({
-        card: p.card,
-        from: { zone: 'trick' as const },
-        to:   { zone: 'won'   as const, player: winner },
-      })),
-    });
+    if (!simulate) {
+      events.push({
+        type:      'TRICK_RESOLVED',
+        winner,
+        transfers: s.currentTrick.map(p => ({
+          card: p.card,
+          from: { zone: 'trick' as const },
+          to:   { zone: 'won'   as const, player: winner },
+        })),
+      });
+    }
 
     s.trickNum++;
     s.leader       = winner;
@@ -788,21 +872,21 @@ function _applyCardPlay(state: State, card: Card): EngineResult<State> {
         s.scores[s.declarer]! += declarerDelta;
         s.scores[defender]!   += defenderDelta;
 
-        events.push({
-          type:          'HAND_SCORED',
-          deltas:        [
-            { player: s.declarer, delta: declarerDelta, reason: 'hand-result' },
-            { player: defender,   delta: defenderDelta, reason: 'hand-result' },
-          ],
-          runningTotals: [...s.scores],
-        });
+        if (!simulate) {
+          events.push({
+            type:          'HAND_SCORED',
+            deltas:        [
+              { player: s.declarer, delta: declarerDelta, reason: 'hand-result' },
+              { player: defender,   delta: defenderDelta, reason: 'hand-result' },
+            ],
+            runningTotals: [...s.scores],
+          });
+        }
       } else {
-        // No declarer: whoever wins more card points wins noDeclarerValue.
-        // Draw (35–35) doubles the multiplier for the next hand.
         const p0pts = countCardPoints(s.capturedCards[0] ?? []);
         const p1pts = countCardPoints(s.capturedCards[1] ?? []);
         if (p0pts === p1pts) {
-          s.nextHandMultiplier = s.handMultiplier * 2;
+          s.nextHandMultiplier = 2;   // no-bid draw: refresh to ×2 for next round (no compounding)
         } else {
           s.nextHandMultiplier = 1;
           const winner = p0pts > p1pts ? 0 : 1;
@@ -810,20 +894,20 @@ function _applyCardPlay(state: State, card: Card): EngineResult<State> {
           const delta  = SCORING_SYSTEMS[s.scoring].noDeclarerValue * s.handMultiplier;
           s.scores[winner]! += delta;
           s.scores[loser]!  -= delta;
-          events.push({
-            type:          'HAND_SCORED',
-            deltas:        [
-              { player: winner, delta:  delta, reason: 'no-declarer-win' },
-              { player: loser,  delta: -delta, reason: 'no-declarer-loss' },
-            ],
-            runningTotals: [...s.scores],
-          });
+          if (!simulate) {
+            events.push({
+              type:          'HAND_SCORED',
+              deltas:        [
+                { player: winner, delta:  delta, reason: 'no-declarer-win' },
+                { player: loser,  delta: -delta, reason: 'no-declarer-loss' },
+              ],
+              runningTotals: [...s.scores],
+            });
+          }
         }
       }
 
       s.phase = 'hand_over';
-      // Session layer emits GAME_OVER after asking players whether to continue.
-      // Pass state.nextHandMultiplier into the next dealState({ handMultiplier: ... }).
     }
   }
 
@@ -865,29 +949,6 @@ function _inferVoids(
     }
   }
   return voids;
-}
-
-/**
- * Kuhn's augmenting-path step.
- * Tries to assign card ci to a free slot, displacing the current occupant if needed.
- * match[slotIdx] = cardIdx assigned to it (-1 = empty).
- */
-function _augment(
-  ci: number,
-  match: number[],
-  visited: Uint8Array,
-  canUse: (ci: number, si: number) => boolean,
-): boolean {
-  for (let si = 0; si < match.length; si++) {
-    if (visited[si]) continue;
-    if (!canUse(ci, si)) continue;
-    visited[si] = 1;
-    if (match[si] === -1 || _augment(match[si]!, match, visited, canUse)) {
-      match[si] = ci;
-      return true;
-    }
-  }
-  return false;
 }
 
 /**
@@ -953,12 +1014,9 @@ function determinize(state: State, perspectivePlayer: number): State {
     return !pv || !pv.has(shuffled[ci]!.suit);
   };
 
-  const match = new Array<number>(totalSlots).fill(-1);
-  for (let ci = 0; ci < shuffled.length; ci++) {
-    _augment(ci, match, new Uint8Array(totalSlots), canUse);
-  }
+  const match = bipartiteMatch(shuffled.length, totalSlots, canUse);
 
-  if (match.some(m => m === -1)) {
+  if (!match) {
     // Void constraints unsatisfiable (shouldn't occur in valid states) — plain shuffle.
     const pool = shuffle(hidden);
     s.hands[opponent] = [...oppRevealed, ...pool.splice(0, oppHandSize)];
@@ -1001,12 +1059,12 @@ function getReward(state: State, playerIndex: number): number | null {
   if (state.declarer === null) {
     const noDecVal = SCORING_SYSTEMS[state.scoring].noDeclarerValue;
     const base     = myPts > 35 ? noDecVal : myPts < 35 ? -noDecVal : 0;
-    raw = base + cardPtBonus;
+    raw = base * state.handMultiplier + cardPtBonus;
   } else {
     const summary = computeHandSummary(state);
     if (!summary) return (Math.tanh(cardPtBonus / REWARD_SCALE) + 1) / 2;
     const { basicDelta, bonusDelta } = SCORING_SYSTEMS[state.scoring].scoreHand(summary);
-    const totalDelta  = basicDelta * state.handMultiplier + bonusDelta;
+    const totalDelta  = (basicDelta + bonusDelta) * state.handMultiplier;
     const signedDelta = playerIndex === state.declarer ? totalDelta : -totalDelta;
     raw = signedDelta + cardPtBonus;
   }
@@ -1028,10 +1086,13 @@ export {
   // State lifecycle
   dealState, cloneState, uncoverStrawmenInitial,
   // Queries
-  getCurrentPlayer, getLegalMoves, getLegalBids, getLegalAnnouncements,
+  getCurrentPlayer, getLegalMoves,
   isHandOver, isGameOver, getHandResult, computeHandSummary,
   // Transition
   applyMove,
   // ISMCTS
   determinize, getReward,
 };
+
+// Compile-time verification that this module satisfies the ISMCTS engine contract.
+const _: ISMCTSEngine<State, Move> = { getLegalMoves, applyMove, isHandOver, determinize, getReward };
