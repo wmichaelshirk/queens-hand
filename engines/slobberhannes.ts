@@ -1,4 +1,44 @@
 import type { Card, BareEvent, EngineResult } from '../types';
+import type { ISMCTSEngine } from '../lib/engine';
+import { bipartiteMatch } from '../lib/matching';
+
+/*
+ * SLOBBERHANNES — Rules as implemented
+ * Source: McLeod, J. (pagat.com/tricks/slobber.html); Parlett, D. "The Penguin Book of Card Games."
+ * ────────────────────────────────────────────────────────────────────────────────
+ *
+ * PLAYERS & DECK
+ *   4 players  — standard 32-card German deck (7 8 9 10 J Q K A in ♣ ♦ ♥ ♠).
+ *   5–6 players — 30-card deck: 7♣ and 7♠ removed (5 players: 6 cards each;
+ *                 6 players: 5 cards each).  This matches McLeod/pagat.com.
+ *   3 players  — this engine uses the same 30-card deck (10 cards each).
+ *     ⚠  DEVIATION: standard references give 3 players a 24-card deck — all
+ *        sevens AND eights removed — yielding 8 cards each, matching the
+ *        4-player hand size.  The 30-card/10-per-player variant is playable
+ *        but does not appear in McLeod or Parlett as the canonical form.
+ *
+ * DEAL & LEAD
+ *   Cards are shuffled and dealt in equal hands.  The first leader is supplied
+ *   externally (typically rotates among players each hand).
+ *
+ * TRICK-PLAY
+ *   Players must follow the led suit if possible; otherwise any card may be played.
+ *   The trick is won by the highest card of the led suit.  Off-suit cards never win.
+ *   There are no trumps.
+ *
+ * PENALTIES  (lower cumulative score is better)
+ *   Each of the following earns 1 penalty point for the player who wins it:
+ *     • The first trick of the hand.
+ *     • The last trick of the hand.
+ *     • Any trick containing the Queen of Clubs (Q♣).
+ *   Slobberhannes sweep: if one player earns all three in the same hand,
+ *   they score 4 points instead of 3.
+ *
+ * SESSION / WINNING CONDITION
+ *   The session ends when any player's cumulative penalty score reaches or
+ *   exceeds `loseAt` (default: 10).  The player with the highest score loses.
+ *   If multiple players tie at the highest score, all are listed as losers.
+ */
 
 const SUITS = ['♣', '♦', '♥', '♠'] as const;
 const RANKS = ['7', '8', '9', '10', 'J', 'Q', 'K', 'A'] as const;
@@ -194,9 +234,10 @@ function getGameResult(state: State): GameResult {
 
 /**
  * Apply a move (card) for the current player. Returns a new state + events; never mutates.
+ * Pass simulate=true in ISMCTS rollouts to skip event object construction.
  * Throws if the card is not in the player's hand or the move is illegal.
  */
-function applyMove(state: State, card: Card): EngineResult<State> {
+function applyMove(state: State, card: Card, simulate = false): EngineResult<State> {
   if (state.phase !== 'playing') throw new Error('Not in playing phase');
 
   const s = cloneState(state);
@@ -208,9 +249,8 @@ function applyMove(state: State, card: Card): EngineResult<State> {
 
   s.currentTrick.push({ playerIndex: pi, card: { ...card } });
 
-  const events: BareEvent[] = [
-    { type: 'CARD_PLAYED', player: pi, card: { ...card } },
-  ];
+  const events: BareEvent[] = [];
+  if (!simulate) events.push({ type: 'CARD_PLAYED', player: pi, card: { ...card } });
 
   if (s.currentTrick.length === s.playerCount) {
     const ledSuit = s.currentTrick[0]!.card.suit;
@@ -222,7 +262,7 @@ function applyMove(state: State, card: Card): EngineResult<State> {
     const hasQoC       = s.currentTrick.some(t => isQueenOfClubs(t.card));
 
     const trickPenalties = Array<number>(s.playerCount).fill(0);
-    const penaltyLabels: string[]  = [];
+    const penaltyLabels: string[] = [];
     if (isFirstTrick) { trickPenalties[winner]!++; penaltyLabels.push('first trick'); }
     if (isLastTrick)  { trickPenalties[winner]!++; penaltyLabels.push('last trick'); }
     if (hasQoC)       { trickPenalties[winner]!++; penaltyLabels.push('Queen of Clubs'); }
@@ -237,15 +277,17 @@ function applyMove(state: State, card: Card): EngineResult<State> {
 
     for (let i = 0; i < s.playerCount; i++) s.handPenalties[i]! += trickPenalties[i]!;
 
-    events.push({
-      type: 'TRICK_RESOLVED',
-      winner,
-      transfers: s.currentTrick.map(p => ({
-        card: p.card,
-        from: { zone: 'trick' as const },
-        to:   { zone: 'won' as const, player: winner },
-      })),
-    });
+    if (!simulate) {
+      events.push({
+        type: 'TRICK_RESOLVED',
+        winner,
+        transfers: s.currentTrick.map(p => ({
+          card: p.card,
+          from: { zone: 'trick' as const },
+          to:   { zone: 'won' as const, player: winner },
+        })),
+      });
+    }
 
     s.trickNum++;
     s.leader = winner;
@@ -257,15 +299,17 @@ function applyMove(state: State, card: Card): EngineResult<State> {
       const gameEnds = s.scores.some(sc => sc >= s.loseAt);
       s.phase = gameEnds ? 'game_over' : 'hand_over';
 
-      const deltas = final.map((delta, player) => ({ player, delta, reason: 'hand-penalty' }));
-      events.push({ type: 'HAND_SCORED', deltas, runningTotals: [...s.scores] });
+      if (!simulate) {
+        const deltas = final.map((delta, player) => ({ player, delta, reason: 'hand-penalty' }));
+        events.push({ type: 'HAND_SCORED', deltas, runningTotals: [...s.scores] });
 
-      if (gameEnds) {
-        const result = getGameResult(s);
-        const gameOverEvent = result.losers
-          ? { type: 'GAME_OVER' as const, finalScores: [...s.scores], losers: result.losers }
-          : { type: 'GAME_OVER' as const, finalScores: [...s.scores] };
-        events.push(gameOverEvent);
+        if (gameEnds) {
+          const result = getGameResult(s);
+          const gameOverEvent = result.losers
+            ? { type: 'GAME_OVER' as const, finalScores: [...s.scores], losers: result.losers }
+            : { type: 'GAME_OVER' as const, finalScores: [...s.scores] };
+          events.push(gameOverEvent);
+        }
       }
     }
   }
@@ -303,30 +347,6 @@ function _inferVoids(trickLog: TrickRecord[], perspectivePlayer: number): Map<nu
 }
 
 /**
- * Kuhn's augmenting-path step.
- * Tries to assign card ci to a free slot, recursively displacing the current
- * occupant of any slot if that occupant can be moved elsewhere.
- * match[slotIdx] = cardIdx assigned to it (-1 = empty).
- */
-function _augment(
-  ci: number,
-  match: number[],
-  visited: Uint8Array,
-  canUse: (ci: number, si: number) => boolean,
-): boolean {
-  for (let si = 0; si < match.length; si++) {
-    if (visited[si]) continue;
-    if (!canUse(ci, si)) continue;
-    visited[si] = 1;
-    if (match[si] === -1 || _augment(match[si]!, match, visited, canUse)) {
-      match[si] = ci;
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
  * Assign cards to players via bipartite matching, respecting suit-void constraints.
  */
 function _randomMatchingAssign(
@@ -343,12 +363,8 @@ function _randomMatchingAssign(
     return !pv || !pv.has(cards[ci]!.suit);
   };
 
-  const match = new Array<number>(slots.length).fill(-1);
-  for (let ci = 0; ci < cards.length; ci++) {
-    _augment(ci, match, new Uint8Array(slots.length), canUse);
-  }
-
-  if (match.some(m => m === -1)) {
+  const match = bipartiteMatch(cards.length, slots.length, canUse);
+  if (!match) {
     throw new Error('determinize: void constraints unsatisfiable — invalid game state');
   }
 
@@ -411,3 +427,6 @@ export {
   // ISMCTS
   determinize, getReward,
 };
+
+// Compile-time verification that this module satisfies the ISMCTS engine contract.
+const _: ISMCTSEngine<State, Card> = { getLegalMoves, applyMove, isHandOver, determinize, getReward };

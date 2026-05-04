@@ -1,15 +1,9 @@
+import type { ISMCTSEngine } from '../lib/engine';
+
+export type { ISMCTSEngine };
+
 const DEFAULT_ITERATIONS = 300;
 const UCB_C = Math.SQRT2;
-
-// ── Engine interface ──────────────────────────────────────────────────────────
-
-export interface ISMCTSEngine<TState, TMove extends object> {
-  getLegalMoves(state: TState): TMove[];
-  applyMove(state: TState, move: TMove): { state: TState };
-  isHandOver(state: TState): boolean;
-  determinize(state: TState, playerIndex: number): TState;
-  getReward(state: TState, playerIndex: number): number | null;
-}
 
 // ── Node ──────────────────────────────────────────────────────────────────────
 
@@ -92,7 +86,7 @@ function chooseMove<TState, TMove extends object>(
       if (unvisited.length > 0) break;
       const next = bestUCB(node, legal, moveKey);
       if (!next) break;
-      ({ state: ws } = eng.applyMove(ws, next.move!));
+      ({ state: ws } = eng.applyMove(ws, next.move!, true));
       node = next;
       path.push(node);
     }
@@ -105,7 +99,7 @@ function chooseMove<TState, TMove extends object>(
         const m     = pick(unvisited);
         const child = makeNode(m);
         node.children.set(moveKey(m), child);
-        ({ state: ws } = eng.applyMove(ws, m));
+        ({ state: ws } = eng.applyMove(ws, m, true));
         node = child;
         path.push(node);
       }
@@ -116,7 +110,7 @@ function chooseMove<TState, TMove extends object>(
     while (!eng.isHandOver(s)) {
       const legal = eng.getLegalMoves(s);
       if (legal.length === 0) break;
-      ({ state: s } = eng.applyMove(s, rolloutPolicy ? rolloutPolicy(s, legal) : pick(legal)));
+      ({ state: s } = eng.applyMove(s, rolloutPolicy ? rolloutPolicy(s, legal) : pick(legal), true));
     }
 
     // ── Backpropagation ────────────────────────────────────────────────────
