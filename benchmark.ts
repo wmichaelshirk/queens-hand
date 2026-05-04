@@ -18,7 +18,7 @@ function greedyMove(state: State) {
 }
 
 function ismctsMove(state: State) {
-  return ismcts.chooseCard(state, ISMCTS_PLAYER, { iterations: ISMCTS_ITERATIONS });
+  return ismcts.chooseMove(engine, state, ISMCTS_PLAYER, { iterations: ISMCTS_ITERATIONS });
 }
 
 // ── Game runner ───────────────────────────────────────────────────────────────

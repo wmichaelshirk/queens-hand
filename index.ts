@@ -21,7 +21,7 @@ type AiFn = (state: State, pi: number) => Card;
 // Player 1 (West / South West) uses ISMCTS; all others use greedy.
 function aiFor(playerIndex: number): AiFn | null {
   if (playerIndex === 0) return null;
-  if (playerIndex === 1) return (state, pi) => ismcts.chooseCard(state, pi);
+  if (playerIndex === 1) return (state, pi) => ismcts.chooseMove(engine, state, pi);
   return (state, pi) => {
     const ledSuit = state.currentTrick.length > 0 ? state.currentTrick[0]!.card.suit : null;
     return greedy.chooseCard(state.hands[pi] ?? [], ledSuit);
@@ -175,7 +175,11 @@ function _pileCell(p: straw.StrawmanPile, i: number): string {
  * and the player's full hand (legal plays lit, illegal plays dimmed).
  */
 function printStrawBoard(state: straw.State, names: string[]): void {
-  const legalKeys = new Set(straw.getLegalMoves(state).map(c => `${c.rank}${c.suit}`));
+  const legalKeys = new Set(
+    straw.getLegalMoves(state)
+      .filter((m): m is { type: 'PLAY_CARD'; card: Card } => m.type === 'PLAY_CARD')
+      .map(m => `${m.card.rank}${m.card.suit}`)
+  );
 
   // Opponent pile tops
   const oppPiles = (state.strawmen[1] ?? []).map(_pileCell).join('   ');
@@ -204,25 +208,35 @@ function printStrawBoard(state: straw.State, names: string[]): void {
   console.log(`  Your hand:       ${handStr}`);
 }
 
-/** Prompt the human to pick one of the currently-legal cards. */
-async function askStrawCard(state: straw.State): Promise<Card> {
+/** Prompt the human to pick a legal move (announcement or card play). */
+async function askStrawMove(state: straw.State): Promise<Move> {
   if (state.pendingAnnouncement !== null) {
     console.log(`  ${A.yellow}Must play a ${state.pendingAnnouncement} card.${A.reset}`);
   }
 
-  const legal = [...straw.getLegalMoves(state)].sort(strawCardSort);
-  const parts = legal.map((c, i) => `[${i + 1}] ${display.cardStr(c)}`);
+  const legal = straw.getLegalMoves(state);
+  const annMoves  = legal.filter((m): m is { type: 'MAKE_ANNOUNCEMENT'; announcement: string } =>
+    m.type === 'MAKE_ANNOUNCEMENT');
+  const cardMoves = legal.filter((m): m is { type: 'PLAY_CARD'; card: Card } =>
+    m.type === 'PLAY_CARD').sort((a, b) => strawCardSort(a.card, b.card));
+  const ordered: Move[] = [...annMoves, ...cardMoves];
+
+  const parts = ordered.map((m, i) => {
+    if (m.type === 'MAKE_ANNOUNCEMENT') return `[${i + 1}] ${A.yellow}Announce ${m.announcement}${A.reset}`;
+    if (m.type === 'PLAY_CARD')         return `[${i + 1}] ${display.cardStr(m.card)}`;
+    return `[${i + 1}] ${m.type}`;
+  });
   console.log(`  Play:            ${parts.join('   ')}`);
 
   while (true) {
-    const raw = await display.ask(`  Your move [1-${legal.length}]: `);
+    const raw = await display.ask(`  Your move [1-${ordered.length}]: `);
     const idx = parseInt(raw, 10) - 1;
-    if (idx >= 0 && idx < legal.length) return legal[idx]!;
-    console.log(`  Enter a number 1–${legal.length}.`);
+    if (idx >= 0 && idx < ordered.length) return ordered[idx]!;
+    console.log(`  Enter a number 1–${ordered.length}.`);
   }
 }
 
-import type { BareEvent } from './types';
+import type { BareEvent, Move } from './types';
 
 /**
  * Print any CARD_REVEALED and CARDS_MOVED pile-events from a batch of events.
@@ -247,10 +261,8 @@ function printPileEvents(events: BareEvent[], names: string[]): void {
   }
 }
 
-/** AI picks a random legal move (card play). */
-function strawAiPickCard(state: straw.State): Card {
-  const legal = straw.getLegalMoves(state);
-  return legal[Math.floor(Math.random() * legal.length)]!;
+function strawAiPickMove(state: straw.State, pi: number): Move {
+  return ismcts.chooseMove(straw, state, pi);
 }
 
 async function playStrohmandelnHand(
@@ -274,10 +286,11 @@ async function playStrohmandelnHand(
         ? { type: 'MAKE_BID', bid: 'play' }
         : { type: 'PASS_BID' }));
     } else {
-      // AI always bids "play"
-      const role = isForehand ? 'forehand' : 'dealer';
-      console.log(`\n  ${names[pi]} (${role}) bids: ${A.bold}Play${A.reset}`);
-      ({ state } = straw.applyMove(state, { type: 'MAKE_BID', bid: 'play' }));
+      const move  = strawAiPickMove(state, pi);
+      const role  = isForehand ? 'forehand' : 'dealer';
+      const label = move.type === 'MAKE_BID' ? `${A.bold}Play${A.reset}` : `${A.dim}Pass${A.reset}`;
+      console.log(`\n  ${names[pi]} (${role}) bids: ${label}`);
+      ({ state } = straw.applyMove(state, move));
     }
   }
 
@@ -292,7 +305,7 @@ async function playStrohmandelnHand(
   while (!straw.isHandOver(state)) {
     const pi = straw.getCurrentPlayer(state);
 
-    if (state.currentTrick.length === 0) {
+    if (state.currentTrick.length === 0 && state.pendingAnnouncement === null) {
       console.log(`\n${hr()}`);
       console.log(`  Trick ${state.trickNum + 1} of ${straw.TRICKS_PER_HAND}   Leader: ${A.bold}${names[state.leader]}${A.reset}`);
       console.log(hr());
@@ -302,27 +315,19 @@ async function playStrohmandelnHand(
 
     if (pi === 0) {
       printStrawBoard(state, names);
-
-      // Offer announcements (Beck only, when leading)
-      if (state.scoring === 'Beck') {
-        const annMoves = straw.getLegalAnnouncements(state);
-        for (const ann of annMoves) {
-          if (ann.type !== 'MAKE_ANNOUNCEMENT') continue;
-          const raw = await display.ask(`  Announce ${A.bold}${ann.announcement}${A.reset}? [y/N]: `);
-          if (raw.trim().toLowerCase() === 'y') {
-            ({ state } = straw.applyMove(state, ann));
-            console.log(`  ${A.yellow}You announce: ${ann.announcement}!${A.reset}`);
-          }
-        }
+      const move = await askStrawMove(state);
+      if (move.type === 'MAKE_ANNOUNCEMENT') {
+        console.log(`  ${A.yellow}You announce: ${move.announcement}!${A.reset}`);
       }
-
-      const card = await askStrawCard(state);
-      ({ state, events: playEvents } = straw.applyMove(state, { type: 'PLAY_CARD', card }));
+      ({ state, events: playEvents } = straw.applyMove(state, move));
     } else {
-      // AI: play card
-      const card = strawAiPickCard(state);
-      console.log(`  ${names[pi]} plays: ${display.cardStr(card)}`);
-      ({ state, events: playEvents } = straw.applyMove(state, { type: 'PLAY_CARD', card }));
+      const move = strawAiPickMove(state, pi);
+      if (move.type === 'PLAY_CARD') {
+        console.log(`  ${names[pi]} plays: ${display.cardStr(move.card)}`);
+      } else if (move.type === 'MAKE_ANNOUNCEMENT') {
+        console.log(`  ${names[pi]} announces: ${A.bold}${move.announcement}${A.reset}`);
+      }
+      ({ state, events: playEvents } = straw.applyMove(state, move));
     }
 
     printPileEvents(playEvents, names);
