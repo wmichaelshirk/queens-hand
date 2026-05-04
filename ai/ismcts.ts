@@ -1,192 +1,142 @@
-import type { Card } from '../types';
-import type { State } from '../engines/slobberhannes';
-import * as engine from '../engines/slobberhannes';
-
 const DEFAULT_ITERATIONS = 300;
 const UCB_C = Math.SQRT2;
 
+// ── Engine interface ──────────────────────────────────────────────────────────
+
+export interface ISMCTSEngine<TState, TMove extends object> {
+  getLegalMoves(state: TState): TMove[];
+  applyMove(state: TState, move: TMove): { state: TState };
+  isHandOver(state: TState): boolean;
+  determinize(state: TState, playerIndex: number): TState;
+  getReward(state: TState, playerIndex: number): number | null;
+}
+
 // ── Node ──────────────────────────────────────────────────────────────────────
 
-interface MCTSNode {
-  move:        Card | null;
-  children:    Map<string, MCTSNode>;
+interface Node<TMove extends object> {
+  move:        TMove | null;
+  children:    Map<string, Node<TMove>>;
   visits:      number;
   totalReward: number;
-  availCount:  number;
+  avail:       number;
 }
 
-function makeNode(move: Card | null = null): MCTSNode {
-  return {
-    move,
-    children: new Map(),
-    visits: 0,
-    totalReward: 0,
-    availCount: 0,
-  };
-}
-
-function cardKey(card: Card): string {
-  return `${card.rank}${card.suit}`;
+function makeNode<TMove extends object>(move: TMove | null = null): Node<TMove> {
+  return { move, children: new Map(), visits: 0, totalReward: 0, avail: 0 };
 }
 
 // ── UCB1 ──────────────────────────────────────────────────────────────────────
 
-function ucb1(child: MCTSNode): number {
-  if (child.visits === 0) return Infinity;
-  return (child.totalReward / child.visits) +
-    UCB_C * Math.sqrt(Math.log(child.availCount) / child.visits);
-}
-
-function bestUCB1(node: MCTSNode, legalMoves: Card[]): MCTSNode | null {
-  let best: MCTSNode | null = null;
-  let bestScore = -Infinity;
-  for (const move of legalMoves) {
-    const child = node.children.get(cardKey(move));
-    if (!child) continue;
-    const s = ucb1(child);
-    if (s > bestScore) { bestScore = s; best = child; }
+function bestUCB<TMove extends object>(
+  node:   Node<TMove>,
+  legal:  TMove[],
+  keyFn:  (m: TMove) => string,
+): Node<TMove> | null {
+  let best: Node<TMove> | null = null;
+  let bestV = -Infinity;
+  for (const m of legal) {
+    const c = node.children.get(keyFn(m));
+    if (!c) continue;
+    if (c.visits === 0) return c;
+    const v = c.totalReward / c.visits + UCB_C * Math.sqrt(Math.log(c.avail) / c.visits);
+    if (v > bestV) { bestV = v; best = c; }
   }
   return best;
 }
 
-// ── Rollout ───────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function pick<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)]!;
 }
 
-type RolloutPolicy = (state: State, legalMoves: Card[]) => Card;
-
-function simulate(worldState: State, rolloutPolicy: RolloutPolicy | null): State {
-  let s = worldState;
-  while (!engine.isHandOver(s)) {
-    const moves = engine.getLegalMoves(s);
-    ({ state: s } = engine.applyMove(s, rolloutPolicy ? rolloutPolicy(s, moves) : pick(moves)));
-  }
-  return s;
-}
-
-// ── Reward ────────────────────────────────────────────────────────────────────
-
-interface SideGoal {
-  weight?: number;
-  evaluate: (terminal: State, playerIndex: number) => number;
-}
-
-interface RewardOptions {
-  horizon:   'hand' | 'game';
-  sideGoals: SideGoal[];
-}
-
-function computeReward(terminal: State, playerIndex: number, options: RewardOptions): number {
-  const { horizon, sideGoals } = options;
-
-  // getReward already returns a normalised [0, 1] value; game-horizon uses raw scores.
-  let r = horizon === 'game'
-    ? -(terminal.scores[playerIndex] ?? 0)
-    : (engine.getReward(terminal, playerIndex) ?? 0);
-
-  for (const { weight = 1, evaluate } of sideGoals) {
-    r += weight * evaluate(terminal, playerIndex);
-  }
-
-  return r;
-}
-
 // ── Options ───────────────────────────────────────────────────────────────────
 
-export interface ChooseCardOptions {
+export interface ChooseMoveOptions<TState, TMove extends object> {
   iterations?:    number;
-  horizon?:       'hand' | 'game';
   epsilon?:       number;
-  rolloutPolicy?: RolloutPolicy | null;
-  sideGoals?:     SideGoal[];
+  moveKey?:       (move: TMove) => string;
+  rolloutPolicy?: ((state: TState, legal: TMove[]) => TMove) | null;
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
-function chooseCard(state: State, playerIndex: number, options: ChooseCardOptions = {}): Card {
+function chooseMove<TState, TMove extends object>(
+  eng:         ISMCTSEngine<TState, TMove>,
+  state:       TState,
+  playerIndex: number,
+  options:     ChooseMoveOptions<TState, TMove> = {},
+): TMove {
   const {
     iterations    = DEFAULT_ITERATIONS,
-    horizon       = 'hand',
-    epsilon       = 0.0,
+    epsilon       = 0,
+    moveKey       = (m: TMove) => JSON.stringify(m),
     rolloutPolicy = null,
-    sideGoals     = [],
   } = options;
 
-  const rewardOpts: RewardOptions = { horizon, sideGoals };
-  const root = makeNode();
+  const root = makeNode<TMove>();
 
-  for (let iter = 0; iter < iterations; iter++) {
-    const world = engine.determinize(state, playerIndex);
+  for (let i = 0; i < iterations; i++) {
+    let ws   = eng.determinize(state, playerIndex);
+    let node = root;
+    const path: Node<TMove>[] = [root];
 
     // ── Selection ─────────────────────────────────────────────────────────
-    let node = root;
-    let worldState = world;
-    const path: MCTSNode[] = [root];
-
-    while (!engine.isHandOver(worldState)) {
-      const legal = engine.getLegalMoves(worldState);
-
+    while (!eng.isHandOver(ws)) {
+      const legal = eng.getLegalMoves(ws);
       for (const m of legal) {
-        const child = node.children.get(cardKey(m));
-        if (child) child.availCount++;
+        const c = node.children.get(moveKey(m));
+        if (c) c.avail++;
       }
-
-      const unvisited = legal.filter(m => !node.children.has(cardKey(m)));
+      const unvisited = legal.filter(m => !node.children.has(moveKey(m)));
       if (unvisited.length > 0) break;
-
-      const next = bestUCB1(node, legal);
+      const next = bestUCB(node, legal, moveKey);
       if (!next) break;
-      ({ state: worldState } = engine.applyMove(worldState, next.move!));
+      ({ state: ws } = eng.applyMove(ws, next.move!));
       node = next;
       path.push(node);
     }
 
     // ── Expansion ──────────────────────────────────────────────────────────
-    if (!engine.isHandOver(worldState)) {
-      const legal = engine.getLegalMoves(worldState);
-      const unvisited = legal.filter(m => !node.children.has(cardKey(m)));
-
+    if (!eng.isHandOver(ws)) {
+      const legal     = eng.getLegalMoves(ws);
+      const unvisited = legal.filter(m => !node.children.has(moveKey(m)));
       if (unvisited.length > 0) {
-        const expandMove = pick(unvisited);
-        const child = makeNode(expandMove);
-        node.children.set(cardKey(expandMove), child);
-        ({ state: worldState } = engine.applyMove(worldState, expandMove));
+        const m     = pick(unvisited);
+        const child = makeNode(m);
+        node.children.set(moveKey(m), child);
+        ({ state: ws } = eng.applyMove(ws, m));
         node = child;
         path.push(node);
       }
     }
 
-    // ── Simulation ─────────────────────────────────────────────────────────
-    const terminal = simulate(worldState, rolloutPolicy);
-
-    // ── Backpropagation ─────────────────────────────────────────────────────
-    const reward = computeReward(terminal, playerIndex, rewardOpts);
-    for (const n of path) {
-      n.visits++;
-      n.totalReward += reward;
+    // ── Rollout ────────────────────────────────────────────────────────────
+    let s = ws;
+    while (!eng.isHandOver(s)) {
+      const legal = eng.getLegalMoves(s);
+      if (legal.length === 0) break;
+      ({ state: s } = eng.applyMove(s, rolloutPolicy ? rolloutPolicy(s, legal) : pick(legal)));
     }
+
+    // ── Backpropagation ────────────────────────────────────────────────────
+    const reward = eng.getReward(s, playerIndex) ?? 0;
+    for (const n of path) { n.visits++; n.totalReward += reward; }
   }
 
   // ── Move selection ─────────────────────────────────────────────────────────
-  const legalMoves = engine.getLegalMoves(state);
+  const legal = eng.getLegalMoves(state);
+  if (epsilon > 0 && Math.random() < epsilon) return pick(legal);
 
-  if (epsilon > 0 && Math.random() < epsilon) {
-    return pick(legalMoves);
-  }
-
-  let bestMove = legalMoves[0]!;
+  let best    = legal[0]!;
   let bestAvg = -Infinity;
-
-  for (const move of legalMoves) {
-    const child = root.children.get(cardKey(move));
-    if (!child || child.visits === 0) continue;
-    const avg = child.totalReward / child.visits;
-    if (avg > bestAvg) { bestAvg = avg; bestMove = move; }
+  for (const m of legal) {
+    const c = root.children.get(moveKey(m));
+    if (!c || c.visits === 0) continue;
+    const avg = c.totalReward / c.visits;
+    if (avg > bestAvg) { bestAvg = avg; best = m; }
   }
-
-  return bestMove;
+  return best;
 }
 
-export { chooseCard };
+export { chooseMove };

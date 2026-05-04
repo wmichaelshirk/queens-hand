@@ -377,18 +377,10 @@ function _playableCards(state: State, pi: number): Card[] {
 }
 
 /**
- * Legal cards for the current player during the playing phase.
- *
- * If `pendingAnnouncement` is set, the player must play a card from the announced
- * set (one of {★, XXI, I} for Trull; any king for Royal Trull).
- *
- * Otherwise follow rules (Farbzwang):
- *   1. Follow the led suit if possible.
- *   2. Otherwise play a tarock.
- *   3. Otherwise play any card.
- * There is no obligation to win (Stichzwang).
+ * Legal cards for the current player during the playing phase (Farbzwang rules).
+ * Internal helper — callers should use getLegalMoves for the unified Move[] interface.
  */
-function getLegalMoves(state: State): Card[] {
+function _getLegalCards(state: State): Card[] {
   if (state.phase !== 'playing') return [];
   const pi       = getCurrentPlayer(state);
   const playable = _playableCards(state, pi);
@@ -413,6 +405,22 @@ function getLegalMoves(state: State): Card[] {
   if (tarocks.length > 0) return tarocks;
 
   return playable;
+}
+
+/**
+ * All legal moves for the current player across every phase:
+ *   - bidding  → MAKE_BID / PASS_BID
+ *   - playing  → MAKE_ANNOUNCEMENT (optional, when leading) + PLAY_CARD moves
+ *   - terminal → []
+ */
+function getLegalMoves(state: State): Move[] {
+  if (state.phase === 'bidding') return getLegalBids(state);
+  if (state.phase === 'playing') {
+    const annMoves  = getLegalAnnouncements(state);
+    const cardMoves = _getLegalCards(state).map(card => ({ type: 'PLAY_CARD' as const, card }));
+    return [...annMoves, ...cardMoves];
+  }
+  return [];
 }
 
 /**
