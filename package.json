@@ -1,7 +1,7 @@
 {
-  "name": "slobberhannes",
+  "name": "queens-hand",
   "version": "0.1.0",
-  "description": "Slobberhannes card game engine and CLI",
+  "description": "The Queen's Hand — card game engines and CLI",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
