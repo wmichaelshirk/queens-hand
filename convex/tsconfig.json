@@ -1,0 +1,13 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "target": "ESNext",
+    "rootDir": ".",
+    "outDir": "../dist/convex",
+    "paths": {}
+  },
+  "include": ["./**/*.ts"],
+  "exclude": ["node_modules", "_generated"]
+}

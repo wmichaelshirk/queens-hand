@@ -15,5 +15,9 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "dependencies": {
+    "@convex-dev/auth": "^0.0.92",
+    "convex": "^1.37.0"
   }
 }

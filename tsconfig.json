@@ -17,6 +17,6 @@
     "sourceMap": true,
     "skipLibCheck": true
   },
-  "include": ["**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  "include": ["*.ts", "engines/**/*.ts", "ai/**/*.ts", "lib/**/*.ts"],
+  "exclude": ["node_modules", "dist", "web", "convex"]
 }
