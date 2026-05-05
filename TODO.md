@@ -3,24 +3,10 @@
 Strategy: lay thin architectural foundations across all four features first,
 then build each feature to depth in order.
 
-### Known architectural notes (address during TS migration or Phase 1)
+### Known architectural notes (address during Phase 1)
 
-1. **`display.js` imports `SUIT_ORDER`/`RANK_ORDER` from the engine directly.**
-   `cardSort` will silently produce `NaN` for Tarock trump cards (`suit: 'T'`).
-   Fix: pass the order tables as parameters rather than importing them.
-
-2. **ISMCTS hardcodes its engine import.**
-   The algorithm is general; only `determinize`, `applyMove`, `getLegalMoves`,
-   and `getReward` are game-specific. Extract an `EngineInterface` and inject it
-   so ISMCTS is reusable across game engines.
-
-3. **`applyMove` returns bare state, not `EngineResult`.**
-   The most load-bearing pending change. All three callers (`index.js`,
-   `benchmark.js`, ISMCTS rollouts) will need updating. ISMCTS can discard
-   the events array during rollouts — the cost is negligible.
-
-4. **`index.js` and `benchmark.js` both own a full game loop.**
-   Both will delegate to the `gameRoom` server module once it exists (Phase 1.1).
+1. **`index.ts`, `benchmark.ts`, and `benchmark_straw.ts` all own a full game loop.**
+   All will delegate to the `gameRoom` server module once it exists (Phase 1.1).
    Duplication is expected until then.
 
 ---
