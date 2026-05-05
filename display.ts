@@ -107,15 +107,18 @@ function printTrickResult(trickRecord: TrickRecord, names: string[]): void {
 // ── Hand summary ──────────────────────────────────────────────────────────────
 
 function printHandSummary(names: string[], state: State): void {
-  const penalties = engine.getHandResult(state);
+  const breakdowns = engine.getHandBreakdown(state);
   console.log(`\n${A.bold}Hand summary${A.reset}`);
-  names.forEach((name, i) => {
-    const p = penalties[i] ?? 0;
-    const delta = p > 0
-      ? `${A.yellow}+${p}${A.reset}`
-      : ` 0`;
-    console.log(`  ${name.padEnd(6)}: ${delta}   total: ${state.scores[i] ?? 0}`);
-  });
+  for (const { player, items, total } of breakdowns) {
+    const name  = names[player] ?? `Player ${player}`;
+    const score = state.scores[player] ?? 0;
+    if (total === 0) {
+      console.log(`  ${name.padEnd(10)}:  0   total: ${score}`);
+    } else {
+      const detail = items.join(' + ');
+      console.log(`  ${name.padEnd(10)}: ${A.yellow}+${total}${A.reset}  (${detail})   total: ${score}`);
+    }
+  }
 }
 
 // ── Input ─────────────────────────────────────────────────────────────────────
