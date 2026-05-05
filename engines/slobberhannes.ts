@@ -218,6 +218,36 @@ function getHandResult(state: State): number[] {
   return _applySweepBonus(state.handPenalties);
 }
 
+export interface PlayerHandBreakdown {
+  player: number;
+  items:  string[];  // each string is a 1-point penalty label; sweep adds 'sweep'
+  total:  number;    // final penalty after sweep bonus
+}
+
+/**
+ * Per-player penalty breakdown for the completed hand.
+ * Aggregates penaltyLabels from the trick log and appends 'sweep' if the
+ * sweep bonus (4th point) was triggered.
+ */
+function getHandBreakdown(state: State): PlayerHandBreakdown[] {
+  const rawPenalties   = [...state.handPenalties];
+  const finalPenalties = _applySweepBonus(rawPenalties);
+
+  const labelsByPlayer = new Map<number, string[]>();
+  for (const trick of state.trickLog) {
+    if (trick.penaltyLabels.length > 0) {
+      const existing = labelsByPlayer.get(trick.winner) ?? [];
+      labelsByPlayer.set(trick.winner, [...existing, ...trick.penaltyLabels]);
+    }
+  }
+
+  return Array.from({ length: state.playerCount }, (_, pi) => {
+    const items = [...(labelsByPlayer.get(pi) ?? [])];
+    if ((finalPenalties[pi] ?? 0) > (rawPenalties[pi] ?? 0)) items.push('sweep');
+    return { player: pi, items, total: finalPenalties[pi] ?? 0 };
+  });
+}
+
 /**
  * Cumulative game scores and the loser(s).
  * `loser` is the index of the first player at the maximum score,
@@ -421,7 +451,7 @@ export {
   dealState, cloneState,
   // Queries
   getCurrentPlayer, getLegalMoves, isHandOver, isGameOver,
-  getHandResult, getGameResult,
+  getHandResult, getHandBreakdown, getGameResult,
   // Transition
   applyMove,
   // ISMCTS

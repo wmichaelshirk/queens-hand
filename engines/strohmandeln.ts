@@ -656,6 +656,130 @@ function computeHandSummary(state: State): HandSummary | null {
   };
 }
 
+export interface PlayerScoreBreakdown {
+  player: number;
+  role:   'declarer' | 'defender' | 'none';  // 'none' = no-bid hand
+  items:  Array<{ label: string; delta: number }>;  // delta from this player's perspective
+  total:  number;
+}
+
+/**
+ * Produce per-item score line-items from the declarer's perspective.
+ * Each item's declarerDelta: positive = good for declarer.
+ * Only non-zero items are included (only things that actually scored).
+ */
+function _breakdownItems(
+  scoring: ScoringSystemName,
+  s:       HandSummary,
+): Array<{ label: string; declarerDelta: number }> {
+  const items: Array<{ label: string; declarerDelta: number }> = [];
+
+  const bi = (achiever: number | null, label: string, val = 1) => {
+    const d = _bonus(achiever, s.declarer, val);
+    if (d !== 0) items.push({ label, declarerDelta: d });
+  };
+
+  if (scoring === 'Beck') {
+    const won = s.declarerCardPoints >= DECLARER_WINS_AT;
+    items.push({ label: `game (${won ? 'win' : 'loss'})`, declarerDelta: won ? 2 : -3 });
+    bi(s.pagatUltimoWinner, 'Pagat Ultimo');
+    bi(s.trullWinner,       'Trull');
+    bi(s.royalTrullWinner,  'Royal Trull');
+
+  } else if (scoring === 'Furr') {
+    if (s.valatWinner !== null) {
+      bi(s.valatWinner, 'Valat', 12);
+      bi(s.pagatUltimoWinner, 'Pagat Ultimo');
+      bi(s.uhuWinner,         'Uhu');
+      bi(s.kakaduWinner,      'Kakadu');
+      bi(s.mondFangWinner,    'Mond Fang');
+      // Trull + Royal Trull replaced by Valat
+    } else {
+      const declarerWon = s.declarerCardPoints >= DECLARER_WINS_AT;
+      const label = declarerWon
+        ? (s.declarerCardPoints >= DECLARER_MAJOR_WIN_AT ? 'major win'  : 'win')
+        : (s.defenderCardPoints >= DEFENDER_MAJOR_WIN_AT ? 'major loss' : 'loss');
+      const val = declarerWon
+        ? (s.declarerCardPoints >= DECLARER_MAJOR_WIN_AT ? 4  : 3)
+        : (s.defenderCardPoints >= DEFENDER_MAJOR_WIN_AT ? -5 : -4);
+      items.push({ label: `game (${label})`, declarerDelta: val });
+      bi(s.pagatUltimoWinner, 'Pagat Ultimo');
+      bi(s.uhuWinner,         'Uhu');
+      bi(s.kakaduWinner,      'Kakadu');
+      bi(s.mondFangWinner,    'Mond Fang');
+      bi(s.trullWinner,       'Trull');
+      bi(s.royalTrullWinner,  'Royal Trull');
+    }
+
+  } else { // Mayr
+    if (s.valatWinner !== null) {
+      bi(s.valatWinner, 'Valat', 12);
+      bi(s.pagatUltimoWinner, 'Pagat Ultimo');
+      bi(s.uhuWinner,         'Uhu');
+      bi(s.kakaduWinner,      'Kakadu');
+      bi(s.mondFangWinner,    'Mond Fang');
+      bi(s.quapilWinner,      'Quapil');
+      // Trull + Royal Trull replaced by Valat
+    } else {
+      const won = s.declarerCardPoints >= DECLARER_WINS_AT;
+      items.push({ label: `game (${won ? 'win' : 'loss'})`, declarerDelta: won ? 3 : -4 });
+      bi(s.pagatUltimoWinner, 'Pagat Ultimo');
+      bi(s.uhuWinner,         'Uhu');
+      bi(s.kakaduWinner,      'Kakadu');
+      bi(s.mondFangWinner,    'Mond Fang');
+      bi(s.trullWinner,       'Trull');
+      bi(s.royalTrullWinner,  'Royal Trull');
+      bi(s.quapilWinner,      'Quapil');
+    }
+  }
+
+  return items;
+}
+
+/**
+ * Per-player score breakdown for the completed hand, ready for display.
+ * Returns null only for a no-bid 35–35 draw (no scores change hands).
+ * All deltas are from each individual player's perspective and already
+ * scaled by the hand multiplier.
+ */
+function computeScoreBreakdown(state: State): PlayerScoreBreakdown[] | null {
+  if (!isHandOver(state)) return null;
+
+  // No-bid hand
+  if (state.declarer === null) {
+    const p0pts = countCardPoints(state.capturedCards[0] ?? []);
+    const p1pts = countCardPoints(state.capturedCards[1] ?? []);
+    if (p0pts === p1pts) return null;   // draw — nothing to show
+    const winner = p0pts > p1pts ? 0 : 1;
+    const delta  = SCORING_SYSTEMS[state.scoring].noDeclarerValue * state.handMultiplier;
+    return [0, 1].map(pi => ({
+      player: pi,
+      role:   'none' as const,
+      items:  [{ label: 'game (no-bid)', delta: pi === winner ? delta : -delta }],
+      total:  pi === winner ? delta : -delta,
+    }));
+  }
+
+  const summary = computeHandSummary(state);
+  if (!summary) return null;
+
+  const rawItems = _breakdownItems(state.scoring, summary);
+  const mult     = state.handMultiplier;
+  const decl     = state.declarer;
+  const def      = 1 - decl;
+
+  const makeBreakdown = (pi: number, role: 'declarer' | 'defender'): PlayerScoreBreakdown => {
+    const sign  = pi === decl ? 1 : -1;
+    const items = rawItems
+      .map(({ label, declarerDelta }) => ({ label, delta: declarerDelta * sign * mult }))
+      .filter(it => it.delta !== 0);
+    return { player: pi, role, items, total: items.reduce((sum, it) => sum + it.delta, 0) };
+  };
+
+  return [makeBreakdown(decl, 'declarer'), makeBreakdown(def, 'defender')]
+    .sort((a, b) => a.player - b.player);
+}
+
 /**
  * Remove a card from the player's hand or the top of one of their strawman piles.
  * Returns the pile index (0-based) if removed from a pile, 'hand' if from hand,
@@ -1087,7 +1211,7 @@ export {
   dealState, cloneState, uncoverStrawmenInitial,
   // Queries
   getCurrentPlayer, getLegalMoves,
-  isHandOver, isGameOver, getHandResult, computeHandSummary,
+  isHandOver, isGameOver, getHandResult, computeHandSummary, computeScoreBreakdown,
   // Transition
   applyMove,
   // ISMCTS

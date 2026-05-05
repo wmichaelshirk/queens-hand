@@ -340,37 +340,65 @@ async function playStrohmandelnHand(
   }
 
   // ── Hand summary ──
-  const result   = straw.getHandResult(state);
-  const summary  = straw.computeHandSummary(state);
+  const cardResult  = straw.getHandResult(state);
+  const breakdowns  = straw.computeScoreBreakdown(state);
+  const sign        = (n: number) => n >= 0 ? `+${n}` : `${n}`;
   console.log(`\n${A.bold}Hand result${A.reset}`);
 
-  if (result && summary && state.declarer !== null) {
-    const sys  = straw.SCORING_SYSTEMS[state.scoring];
-    const { basicDelta, bonusDelta } = sys.scoreHand(summary);
-    const total = basicDelta * state.handMultiplier + bonusDelta;
+  // Card-point totals
+  if (state.declarer !== null && cardResult) {
     const d   = state.declarer;
     const def = 1 - d;
+    console.log(`  ${(names[d]   ?? '?').padEnd(10)} (declarer): ${cardResult.declarerPoints} card pts`);
+    console.log(`  ${(names[def] ?? '?').padEnd(10)} (defender): ${cardResult.defenderPoints} card pts`);
+  } else if (state.declarer === null) {
+    const p0pts = straw.countCardPoints(state.capturedCards[0] ?? []);
+    const p1pts = straw.countCardPoints(state.capturedCards[1] ?? []);
+    console.log(`  ${(names[0] ?? 'Player 0').padEnd(10)}: ${p0pts} card pts`);
+    console.log(`  ${(names[1] ?? 'Player 1').padEnd(10)}: ${p1pts} card pts`);
+  }
 
-    console.log(`  ${(names[d] ?? '?').padEnd(8)} (declarer): ${result.declarerPoints} card pts`);
-    console.log(`  ${(names[def] ?? '?').padEnd(8)} (defender): ${result.defenderPoints} card pts`);
+  if (state.handMultiplier > 1) {
+    console.log(`  ${A.yellow}Hand multiplier: ×${state.handMultiplier}${A.reset}`);
+  }
 
-    if (state.handMultiplier > 1) {
-      console.log(`  Basic delta ×${state.handMultiplier} (carry-over multiplier)`);
+  // Per-player score breakdown
+  if (breakdowns) {
+    console.log('');
+    for (const bd of breakdowns) {
+      const name   = names[bd.player] ?? `Player ${bd.player}`;
+      const role   = bd.role !== 'none' ? ` (${bd.role})` : '';
+      const detail = bd.items.map(it => `${it.label}: ${sign(it.delta)}`).join(', ');
+      console.log(`  ${name.padEnd(10)}${role}: ${A.yellow}${sign(bd.total)}${A.reset}  (${detail})`);
     }
-    const sign = (n: number) => n > 0 ? `+${n}` : `${n}`;
-    console.log(`  Game points:  ${names[d]}: ${A.yellow}${sign(total)}${A.reset}   ${names[def]}: ${A.yellow}${sign(-total)}${A.reset}`);
-    if (basicDelta === 0) console.log(`  ${A.yellow}Draw — next hand is doubled.${A.reset}`);
-  } else {
-    console.log('  No scoring — neither player bid.');
+  } else if (state.declarer === null) {
+    // Only remaining null case: no-bid 35–35 draw
+    console.log(`  ${A.yellow}35–35 draw — next hand is doubled.${A.reset}`);
   }
 
   console.log(`\n  Running totals:  You: ${state.scores[0]}   Opponent: ${state.scores[1]}`);
   return state;
 }
 
+async function askScoringSystem(): Promise<straw.ScoringSystemName> {
+  const options = Object.keys(straw.SCORING_SYSTEMS) as straw.ScoringSystemName[];
+  console.log(`\n${A.bold}Choose a scoring system:${A.reset}`);
+  options.forEach((name, i) => {
+    const sys = straw.SCORING_SYSTEMS[name];
+    console.log(`  [${i + 1}]  ${sys.name}`);
+  });
+  while (true) {
+    const raw = await display.ask(`\nChoice [1-${options.length}]: `);
+    const idx = parseInt(raw, 10) - 1;
+    if (idx >= 0 && idx < options.length) return options[idx]!;
+    console.log(`  Enter a number 1–${options.length}.`);
+  }
+}
+
 async function runStrohmandeln(): Promise<void> {
   printStrawWelcome();
 
+  const scoring         = await askScoringSystem();
   let scores: number[]  = [0, 0];
   let dealerIndex       = Math.random() < 0.5 ? 0 : 1;
   let handMultiplier    = 1;
@@ -382,7 +410,7 @@ async function runStrohmandeln(): Promise<void> {
     const initialState = straw.dealState({
       scores,
       dealerIndex,
-      scoring:       'Beck',
+      scoring,
       handMultiplier,
     });
 
