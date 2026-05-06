@@ -3,7 +3,6 @@ dist/
 .env
 .env.local
 .convex/
-convex/_generated/
 web/.env
 web/.env.local
 web/node_modules/
