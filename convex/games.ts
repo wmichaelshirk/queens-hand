@@ -84,6 +84,48 @@ export const createTable = mutation({
   },
 });
 
+export const getTable = query({
+  args: { gameId: v.id("games") },
+  handler: async (ctx, { gameId }) => {
+    const game = await ctx.db.get(gameId);
+    if (!game) return null;
+    const rawSeats = await ctx.db
+      .query("game_seats")
+      .withIndex("by_game", (q) => q.eq("gameId", gameId))
+      .collect();
+    const seats = await Promise.all(
+      rawSeats.map(async (seat) => {
+        const player = await ctx.db.get(seat.playerId);
+        return {
+          seatIndex: seat.seatIndex,
+          playerId: seat.playerId as string,
+          displayName: player?.displayName ?? "Unknown",
+          isBot: player?.isBot ?? false,
+        };
+      })
+    );
+    return {
+      _id: game._id as string,
+      gameType: game.gameType,
+      status: game.status,
+      seatCount: game.seatCount,
+      createdAt: game.startedAt,
+      seats: seats.sort((a, b) => a.seatIndex - b.seatIndex),
+    };
+  },
+});
+
+export const getTableMessages = query({
+  args: { gameId: v.id("games") },
+  handler: async (ctx, { gameId }) => {
+    return ctx.db
+      .query("table_messages")
+      .withIndex("by_game_ts", (q) => q.eq("gameId", gameId))
+      .order("asc")
+      .take(200);
+  },
+});
+
 export const joinTable = mutation({
   args: {
     gameId: v.id("games"),
@@ -115,5 +157,31 @@ export const joinTable = mutation({
     while (taken.has(nextIndex)) nextIndex++;
 
     await ctx.db.insert("game_seats", { gameId, seatIndex: nextIndex, playerId: player._id });
+  },
+});
+
+export const sendTableMessage = mutation({
+  args: {
+    gameId: v.id("games"),
+    text: v.string(),
+    guestUserId: v.optional(v.string()),
+  },
+  handler: async (ctx, { gameId, text, guestUserId }) => {
+    const authUserId = await getAuthUserId(ctx);
+    const userId = authUserId ?? (guestUserId?.startsWith("guest_") ? guestUserId : null);
+    if (!userId) throw new Error("Not authenticated");
+    const player = await ctx.db
+      .query("players")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .unique();
+    if (!player) throw new Error("Player record not found");
+
+    await ctx.db.insert("table_messages", {
+      gameId,
+      playerId: player._id,
+      displayName: player.displayName,
+      text: text.trim().slice(0, 500),
+      ts: Date.now(),
+    });
   },
 });
