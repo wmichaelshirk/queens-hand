@@ -10,20 +10,23 @@ const PRESENCE_TTL_MS = 60_000; // 60 s — users who haven't pinged are "offlin
 // Upsert a presence heartbeat for the current user.
 // Call this on mount and every 30 s.
 export const ping = mutation({
-  args: {},
-  handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return;
+  args: { guestUserId: v.optional(v.string()) },
+  handler: async (ctx, { guestUserId }) => {
+    const authUserId = await getAuthUserId(ctx);
+    const userId = authUserId ?? null;
 
-    const player = await ctx.db
-      .query("players")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
-      .first();
-    if (!player) return;
+    const player = userId
+      ? await ctx.db.query("players").withIndex("by_user", (q) => q.eq("userId", userId)).first()
+      : guestUserId?.startsWith("guest_")
+        ? await ctx.db.query("players").withIndex("by_user", (q) => q.eq("userId", guestUserId)).first()
+        : null;
+
+    if (!player || (!authUserId && !player.isGuest)) return;
+    const effectiveUserId = player.userId;
 
     const existing = await ctx.db
       .query("presence")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .withIndex("by_user", (q) => q.eq("userId", effectiveUserId))
       .first();
 
     const now = Date.now();
@@ -31,7 +34,7 @@ export const ping = mutation({
       await ctx.db.patch(existing._id, { lastSeen: now, displayName: player.displayName });
     } else {
       await ctx.db.insert("presence", {
-        userId,
+        userId: effectiveUserId,
         displayName: player.displayName,
         lastSeen: now,
       });
@@ -70,16 +73,18 @@ export const getMessages = query({
 // Post a message to the lobby chat.
 // Prunes the oldest message when the window exceeds MAX_MESSAGES.
 export const sendMessage = mutation({
-  args: { text: v.string() },
-  handler: async (ctx, { text }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+  args: { text: v.string(), guestUserId: v.optional(v.string()) },
+  handler: async (ctx, { text, guestUserId }) => {
+    const authUserId = await getAuthUserId(ctx);
 
-    const player = await ctx.db
-      .query("players")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
-      .first();
-    if (!player) throw new Error("Player record not found");
+    const player = authUserId
+      ? await ctx.db.query("players").withIndex("by_user", (q) => q.eq("userId", authUserId)).first()
+      : guestUserId?.startsWith("guest_")
+        ? await ctx.db.query("players").withIndex("by_user", (q) => q.eq("userId", guestUserId)).first()
+        : null;
+
+    if (!player) throw new Error("Not authenticated");
+    if (!authUserId && !player.isGuest) throw new Error("Not authenticated");
 
     const trimmed = text.trim();
     if (!trimmed) return;

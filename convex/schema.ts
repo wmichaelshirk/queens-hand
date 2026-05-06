@@ -8,9 +8,10 @@ export default defineSchema({
   // ── Permanent collections ──────────────────────────────────────────────
 
   players: defineTable({
-    userId: v.string(),          // Convex Auth user id
+    userId: v.string(),          // Convex Auth user id, or "guest_<token>" for guests
     displayName: v.string(),
     isBot: v.boolean(),
+    isGuest: v.optional(v.boolean()),
     // Per-game-type ratings: { slobberhannes: { rating, sigma }, ... }
     ratings: v.record(v.string(), v.object({
       rating: v.number(),

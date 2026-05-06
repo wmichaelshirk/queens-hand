@@ -23,6 +23,7 @@ import { PUBLIC_CONVEX_URL } from "$env/static/public";
 const ACCESS_KEY = "qh_access_token";
 const REFRESH_KEY = "qh_refresh_token";
 const VERIFIER_KEY = "qh_auth_verifier";
+const GUEST_KEY = "qh_guest_session";
 
 // ── Auth state stores ─────────────────────────────────────────────────────────
 
@@ -31,6 +32,33 @@ const _accessToken = writable<string | null>(
 );
 
 export const isAuthenticated = derived(_accessToken, (t) => t !== null);
+
+// ── Guest session ─────────────────────────────────────────────────────────────
+
+export type GuestSession = { playerId: string; userId: string; displayName: string };
+
+function loadGuest(): GuestSession | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(GUEST_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+export const guestSession = writable<GuestSession | null>(loadGuest());
+
+guestSession.subscribe((s) => {
+  if (typeof window === "undefined") return;
+  if (s) localStorage.setItem(GUEST_KEY, JSON.stringify(s));
+  else localStorage.removeItem(GUEST_KEY);
+});
+
+export const isLoggedIn = derived(
+  [isAuthenticated, guestSession],
+  ([auth, guest]) => auth || guest !== null
+);
 
 // ── Convex client ─────────────────────────────────────────────────────────────
 
@@ -121,7 +149,16 @@ export async function handleCallback(): Promise<void> {
   window.history.replaceState({}, "", clean.toString());
 }
 
+export async function signInAsGuest(displayName: string): Promise<void> {
+  const session: GuestSession = await convex.mutation("guest:createGuest" as any, { displayName });
+  guestSession.set(session);
+}
+
 export async function signOut(): Promise<void> {
+  if (get(guestSession)) {
+    guestSession.set(null);
+    return;
+  }
   try {
     await convex.action("auth:signOut" as any, {});
   } catch {

@@ -1,13 +1,26 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { isAuthenticated, signIn, signOut, convex, watchQuery } from "$lib/convex";
-  import { api } from "../../convex/_generated/api";
+  import { isAuthenticated, isLoggedIn, guestSession, signIn, signInAsGuest, signOut, convex, watchQuery } from "$lib/convex";
+  import { api } from "$convex/_generated/api";
 
   // ── Auth ──────────────────────────────────────────────────────────────────
 
   let email = $state("");
   let emailSent = $state(false);
   let authError = $state("");
+
+  let guestName = $state("");
+  let guestError = $state("");
+
+  async function loginAsGuest() {
+    guestError = "";
+    if (!guestName.trim()) { guestError = "Enter a name to continue."; return; }
+    try {
+      await signInAsGuest(guestName.trim());
+    } catch (e: any) {
+      guestError = e?.message ?? "Something went wrong.";
+    }
+  }
 
   async function loginWithGoogle() {
     authError = "";
@@ -23,7 +36,7 @@
 
   // ── Player record ─────────────────────────────────────────────────────────
 
-  // Ensure a players row exists after first login
+  // Ensure a players row exists after first login (auth users only; guests are created on sign-in)
   $effect(() => {
     if ($isAuthenticated) {
       convex.mutation("auth:ensurePlayer" as any, {}).catch(() => {});
@@ -44,10 +57,11 @@
   let presenceInterval: ReturnType<typeof setInterval>;
 
   $effect(() => {
-    if ($isAuthenticated) {
-      convex.mutation("lobby:ping" as any, {}).catch(() => {});
+    if ($isLoggedIn) {
+      const guestUserId = $guestSession?.userId;
+      convex.mutation("lobby:ping" as any, { guestUserId }).catch(() => {});
       presenceInterval = setInterval(() => {
-        convex.mutation("lobby:ping" as any, {}).catch(() => {});
+        convex.mutation("lobby:ping" as any, { guestUserId }).catch(() => {});
       }, 30_000);
     }
     return () => clearInterval(presenceInterval);
@@ -77,7 +91,7 @@
     const text = chatText.trim();
     if (!text) return;
     chatText = "";
-    await convex.mutation("lobby:sendMessage" as any, { text });
+    await convex.mutation("lobby:sendMessage" as any, { text, guestUserId: $guestSession?.userId });
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -104,7 +118,7 @@
   }
 </script>
 
-{#if !$isAuthenticated}
+{#if !$isLoggedIn}
   <!-- ── Login screen ─────────────────────────────────────────────────── -->
   <main class="login-wrap">
     <div class="login-card">
@@ -143,20 +157,41 @@
           <button type="submit" class="btn btn-primary">Send sign-in link</button>
         </form>
       {/if}
+
+      <div class="divider"><span>or</span></div>
+
+      <form onsubmit={(e) => { e.preventDefault(); loginAsGuest(); }}>
+        {#if guestError}
+          <p class="error">{guestError}</p>
+        {/if}
+        <input
+          type="text"
+          placeholder="Choose a name…"
+          bind:value={guestName}
+          maxlength="32"
+          class="input"
+        />
+        <button type="submit" class="btn btn-guest">Play as Guest</button>
+      </form>
+      <p class="guest-note">Guest sessions don't carry rankings or history.</p>
     </div>
   </main>
 
 {:else}
   <!-- ── Lobby ─────────────────────────────────────────────────────────── -->
+  {@const currentPlayer = $me ?? ($guestSession ? { _id: $guestSession.playerId, displayName: $guestSession.displayName } : null)}
   <div class="lobby">
 
     <!-- Sidebar: who's online + user controls -->
     <aside class="sidebar">
       <div class="sidebar-header">
         <h2>The Queen's Hand</h2>
-        {#if $me}
+        {#if currentPlayer}
           <div class="me">
-            {#if editingName}
+            {#if $guestSession}
+              <span class="display-name">{currentPlayer.displayName}</span>
+              <span class="guest-badge">guest</span>
+            {:else if editingName}
               <input
                 class="input input-sm"
                 bind:value={newName}
@@ -164,7 +199,7 @@
               />
               <button class="btn-link" onclick={saveName}>save</button>
             {:else}
-              <span class="display-name">{$me.displayName}</span>
+              <span class="display-name">{currentPlayer.displayName}</span>
               <button class="btn-link" onclick={startEditName}>edit</button>
             {/if}
           </div>
@@ -176,9 +211,9 @@
       <ul class="player-list">
         {#if $onlinePlayers && $onlinePlayers.length > 0}
           {#each $onlinePlayers as p (p._id)}
-            <li class:is-me={p._id === $me?._id}>
+            <li class:is-me={p._id === currentPlayer?._id}>
               {p.displayName}
-              {#if p._id === $me?._id}<span class="you-tag">(you)</span>{/if}
+              {#if p._id === currentPlayer?._id}<span class="you-tag">(you)</span>{/if}
             </li>
           {/each}
         {:else}
@@ -194,7 +229,7 @@
       <div class="messages" bind:this={chatEl}>
         {#if $messages && $messages.length > 0}
           {#each $messages as msg (msg._id)}
-            <div class="message" class:own={msg.displayName === $me?.displayName}>
+            <div class="message" class:own={msg.displayName === currentPlayer?.displayName}>
               <span class="msg-name">{msg.displayName}</span>
               <span class="msg-text">{msg.text}</span>
             </div>
@@ -464,6 +499,34 @@
 
   :global(.btn-google:hover) {
     background: #f5f5f5;
+  }
+
+  :global(.btn-guest) {
+    background: #2a2a3e;
+    border-color: #444;
+    color: #ccc;
+    width: 100%;
+    margin-top: 0.4rem;
+  }
+
+  :global(.btn-guest:hover) {
+    background: #333350;
+  }
+
+  .guest-note {
+    font-size: 0.78rem;
+    color: #555;
+    text-align: center;
+    margin-top: -0.25rem;
+  }
+
+  .guest-badge {
+    font-size: 0.7rem;
+    background: #333;
+    color: #888;
+    border-radius: 4px;
+    padding: 0.1rem 0.35rem;
+    margin-left: 0.25rem;
   }
 
   :global(.btn-sm) {
