@@ -155,10 +155,13 @@ export async function signInAsGuest(displayName: string): Promise<void> {
 }
 
 export async function signOut(): Promise<void> {
-  if (get(guestSession)) {
+  const guest = get(guestSession);
+  if (guest) {
+    await convex.mutation("lobby:leave" as any, { guestUserId: guest.userId }).catch(() => {});
     guestSession.set(null);
     return;
   }
+  await convex.mutation("lobby:leave" as any, {}).catch(() => {});
   try {
     await convex.action("auth:signOut" as any, {});
   } catch {

@@ -42,6 +42,22 @@ export const ping = mutation({
   },
 });
 
+// Remove presence on sign-out so the user disappears immediately.
+export const leave = mutation({
+  args: { guestUserId: v.optional(v.string()) },
+  handler: async (ctx, { guestUserId }) => {
+    const authUserId = await getAuthUserId(ctx);
+    const effectiveUserId = authUserId ?? (guestUserId?.startsWith("guest_") ? guestUserId : null);
+    if (!effectiveUserId) return;
+
+    const existing = await ctx.db
+      .query("presence")
+      .withIndex("by_user", (q) => q.eq("userId", effectiveUserId))
+      .first();
+    if (existing) await ctx.db.delete(existing._id);
+  },
+});
+
 // Returns players seen within PRESENCE_TTL_MS.
 export const getOnline = query({
   args: {},
