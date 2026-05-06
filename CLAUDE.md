@@ -3,7 +3,7 @@
 ## What this project is
 
 Multiple traditional card game engines (Slobberhannes, Strohmandeln) built in TypeScript,
-hosted on Convex, with a SvelteKit web frontend served from Cloudflare Pages.
+hosted on Convex, with a SvelteKit web frontend served from Vercel.
 Friends-only, not public. Free-tier only — no credit card, no managed infra.
 
 Current phase: **Phase 1** — wiring the Convex backend (mutations, reactive queries,

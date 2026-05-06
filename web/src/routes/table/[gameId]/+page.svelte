@@ -55,7 +55,7 @@
 
   // ── Table chat ─────────────────────────────────────────────────────────────────
 
-  type TableMsg = { _id: string; displayName: string; text: string; ts: number };
+  type TableMsg = { _id: string; playerId: string; displayName: string; text: string; ts: number };
 
   const messages = watchQuery<TableMsg[]>("games:getTableMessages" as any, { gameId });
 
@@ -208,7 +208,7 @@
         <div class="messages" bind:this={chatEl}>
           {#if $messages && $messages.length > 0}
             {#each $messages as msg (msg._id)}
-              <div class="msg" class:own={msg.displayName === currentPlayer?.displayName}>
+              <div class="msg" class:own={msg.playerId === currentPlayer?._id}>
                 <span class="msg-name">{msg.displayName}</span>
                 <span class="msg-text">{msg.text}</span>
               </div>
