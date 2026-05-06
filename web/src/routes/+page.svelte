@@ -134,12 +134,12 @@
 </script>
 
 {#if $isLoggedIn}
-<div class="lobby">
+<div class="shell">
 
-  <!-- Column 1: Players online -->
-  <aside class="pane players">
-    <div class="pane-top">
-      <h2>The Queen's Hand</h2>
+  <!-- Header -->
+  <header class="site-header">
+    <span class="site-title">The Queen's Hand</span>
+    <div class="header-right">
       {#if currentPlayer}
         <div class="me">
           {#if $guestSession}
@@ -156,7 +156,12 @@
       {/if}
       <button class="btn sm" onclick={signOut}>Sign out</button>
     </div>
+  </header>
 
+  <div class="lobby">
+
+  <!-- Column 1: Players online -->
+  <aside class="pane players">
     <h3 class="label">Online now</h3>
     <ul class="player-list">
       {#if $onlinePlayers && $onlinePlayers.length > 0}
@@ -260,14 +265,45 @@
     </div>
   </section>
 
-</div>
+  </div><!-- .lobby -->
+</div><!-- .shell -->
 {/if}
 
 <style>
+  .shell {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* ── Header ──────────────────────────────────────────────────────────────── */
+  .site-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.6rem 1.25rem;
+    background: #12192e;
+    border-bottom: 1px solid #0f3460;
+    flex-shrink: 0;
+  }
+
+  .site-title {
+    font-size: 1rem;
+    font-weight: 700;
+    color: #e94560;
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
   .lobby {
     display: grid;
-    grid-template-columns: 200px 1fr 300px;
-    height: 100vh;
+    grid-template-columns: 200px 400px 1fr;
+    flex: 1;
     overflow: hidden;
   }
 
@@ -308,17 +344,6 @@
   }
 
   /* ── Players pane ────────────────────────────────────────────────────────── */
-  .pane-top {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .pane-top h2 {
-    font-size: 1rem;
-    color: #e94560;
-  }
-
   .me {
     display: flex;
     align-items: center;
@@ -403,8 +428,9 @@
   /* ── Tables pane ─────────────────────────────────────────────────────────── */
   .table-list {
     display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    gap: 0.6rem;
     overflow-y: auto;
     flex: 1;
     min-height: 0;
@@ -414,11 +440,12 @@
     background: #1a2a4a;
     border: 1px solid #0f3460;
     border-radius: 8px;
-    padding: 0.875rem;
+    padding: 0.7rem;
     display: flex;
     flex-direction: column;
-    gap: 0.625rem;
-    flex-shrink: 0;
+    gap: 0.5rem;
+    flex: 1 1 160px;
+    max-width: 220px;
   }
 
   .table-card.create {
