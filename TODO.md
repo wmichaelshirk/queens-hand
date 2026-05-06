@@ -55,43 +55,32 @@ exist; the engines are pure functions and will convert with minimal friction.
       done during 0.0 TypeScript migration
 
 ### 0.3 Define user/session identity
-- [ ] Define a `Player` record: `{ id, displayName, isBot, createdAt }`
-- [ ] Define a `Session` record: `{ id, playerId, gameId, seat, connectedAt }`
-- [ ] Decide on ID scheme (UUIDs are fine; no auth required yet — a name +
-      random token is enough for the free-tier phase)
-- [ ] Note: full auth (OAuth, passwords) is deferred until lobby/online phase
+- [x] `Player` record defined in `convex/schema.ts`: `{ userId, displayName, isBot, isGuest, ratings, createdAt }`
+- [x] Session identity handled by Convex Auth (JWT tokens) for registered users;
+      guest sessions use a random `guest_<token>` userId stored in localStorage
+- [x] Auth wired in `convex/auth.ts` (Google + Resend providers, not yet
+      configured — guests are the active login path)
+- [x] Guest login implemented: enter a name, get a transient player record with
+      no ratings or history
 
 ### 0.4 Choose a persistence layer
-- [ ] Evaluate options for a free-tier, serverless-compatible store:
-      - **Supabase** (Postgres + realtime + auth, generous free tier) — best fit
-        if we want SQL for stats and realtime for live updates
-      - **Cloudflare D1** (SQLite at the edge, free tier) — good if we go
-        Cloudflare Workers for hosting
-      - **Firebase Firestore** (NoSQL, free tier) — easier live updates, weaker
-        query story for stats
-      - **SQLite file** (local dev / self-hosted only) — fine for development,
-        not viable for multi-user serverless
-- [ ] Recommendation: start with SQLite locally behind an abstract
-      `store` interface; wire Supabase in when ready to go online
-- [ ] Define the `store` interface (functions, not a class):
-      `saveGame`, `appendMove`, `getGame`, `getMovesForGame`,
-      `getPlayerRating`, `setPlayerRating`, `upsertPlayer`
-- [ ] Schema (two tables, simple):
-      - `games(id, playerCount, initialState JSON, startedAt, endedAt, result JSON)`
-      - `moves(id, gameId, seq, playerId, card JSON, ts)`
-      - `players(id, displayName, isBot, rating REAL, ratingDeviation REAL,
-        gamesPlayed, createdAt)`
+- [x] Evaluated options; chose **Convex** — TypeScript-native document store
+      with reactive queries, built-in auth, and free tier. Eliminates the need
+      for a separate realtime layer or RLS policies. See ARCHITECTURE.md.
+- [x] Schema defined in `convex/schema.ts`: `players`, `games`, `game_seats`,
+      `game_moves`, `game_live_state`, `game_public_state`, `player_hands`,
+      `presence`, `lobby_messages`
+- [x] No separate `store` interface needed — Convex mutations/queries serve
+      that role directly
 
 ### 0.5 Research serverless hosting options
-- [ ] Compare free-tier options for a stateful WebSocket server:
-      - **Cloudflare Workers + Durable Objects** — WebSocket-native, free
-        generous limits, global edge, no cold-start issue for sockets
-      - **Railway** or **Render** — managed Node.js, free tier available,
-        easier to reason about, not edge
-      - **Fly.io** free tier — persistent containers, good WebSocket support
-- [ ] Note: truly serverless (Lambda/Vercel Functions) is a poor fit for
-      WebSocket game rooms; prefer a persistent process or Durable Objects
-- [ ] Defer final decision until Phase 1; foundation should be host-agnostic
+- [x] Chose **Convex** for all backend logic (DB, auth, realtime, mutations,
+      actions). No separate WebSocket server needed — Convex reactive queries
+      push state to clients automatically.
+- [x] Chose **Vercel** for the SvelteKit frontend (free tier, auto-deploys
+      from GitHub on push to `main`).
+- [x] Both are live: backend at `https://fast-albatross-205.convex.cloud`,
+      frontend deployed via Vercel connected to `wmichaelshirk/queens-hand`.
 
 ---
 
