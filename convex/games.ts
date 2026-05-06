@@ -4,18 +4,6 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 
 const SEAT_COUNTS = { slobberhannes: 4, strohmandeln: 4 } as const;
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-async function resolvePlayer(
-  ctx: Parameters<Parameters<typeof query>[0]["handler"]>[0],
-  guestUserId?: string
-) {
-  const authUserId = await getAuthUserId(ctx);
-  const userId = authUserId ?? (guestUserId?.startsWith("guest_") ? guestUserId : null);
-  if (!userId) return null;
-  return ctx.db.query("players").withIndex("by_user", (q) => q.eq("userId", userId)).unique();
-}
-
 // ── Queries ───────────────────────────────────────────────────────────────────
 
 export const listActiveTables = query({
@@ -69,8 +57,14 @@ export const createTable = mutation({
     guestUserId: v.optional(v.string()),
   },
   handler: async (ctx, { gameType, guestUserId }) => {
-    const player = await resolvePlayer(ctx, guestUserId);
-    if (!player) throw new Error("Not authenticated");
+    const authUserId = await getAuthUserId(ctx);
+    const userId = authUserId ?? (guestUserId?.startsWith("guest_") ? guestUserId : null);
+    if (!userId) throw new Error("Not authenticated");
+    const player = await ctx.db
+      .query("players")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .unique();
+    if (!player) throw new Error("Player record not found");
 
     const gameId = await ctx.db.insert("games", {
       gameType,
@@ -96,8 +90,14 @@ export const joinTable = mutation({
     guestUserId: v.optional(v.string()),
   },
   handler: async (ctx, { gameId, guestUserId }) => {
-    const player = await resolvePlayer(ctx, guestUserId);
-    if (!player) throw new Error("Not authenticated");
+    const authUserId = await getAuthUserId(ctx);
+    const userId = authUserId ?? (guestUserId?.startsWith("guest_") ? guestUserId : null);
+    if (!userId) throw new Error("Not authenticated");
+    const player = await ctx.db
+      .query("players")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .unique();
+    if (!player) throw new Error("Player record not found");
 
     const game = await ctx.db.get(gameId);
     if (!game || game.status !== "waiting") throw new Error("Table is not open");
