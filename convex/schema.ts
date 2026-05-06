@@ -96,4 +96,14 @@ export default defineSchema({
     ts: v.number(),
   })
     .index("by_ts", ["ts"]),
+
+  // ── Table chat (per-game, cleared when game ends) ──────────────────────
+  table_messages: defineTable({
+    gameId: v.id("games"),
+    playerId: v.id("players"),
+    displayName: v.string(),
+    text: v.string(),
+    ts: v.number(),
+  })
+    .index("by_game_ts", ["gameId", "ts"]),
 });

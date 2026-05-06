@@ -251,7 +251,7 @@
             </div>
             <div class="card-footer">
               {#if isSeated}
-                <button class="btn accent-sm">Enter</button>
+                <button class="btn accent-sm" onclick={() => goto(`/table/${table._id}`)}>Enter</button>
               {:else if !isFull && table.status === "waiting"}
                 <button class="btn accent-sm" onclick={() => joinTable(table._id)}>Join</button>
               {:else}
