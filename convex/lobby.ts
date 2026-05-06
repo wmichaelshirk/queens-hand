@@ -112,18 +112,14 @@ export const sendMessage = mutation({
       ts: Date.now(),
     });
 
-    // Prune oldest message if over the cap
-    const count = await ctx.db
+    // Prune oldest message if over the cap; take(2) avoids a full table scan
+    const over = await ctx.db
       .query("lobby_messages")
-      .collect()
-      .then((r) => r.length);
-    if (count > MAX_MESSAGES) {
-      const oldest = await ctx.db
-        .query("lobby_messages")
-        .withIndex("by_ts")
-        .order("asc")
-        .first();
-      if (oldest) await ctx.db.delete(oldest._id);
+      .withIndex("by_ts")
+      .order("asc")
+      .take(MAX_MESSAGES + 1);
+    if (over.length > MAX_MESSAGES) {
+      await ctx.db.delete(over[0]._id);
     }
   },
 });

@@ -84,58 +84,59 @@ exist; the engines are pure functions and will convert with minimal friction.
 
 ---
 
-## Phase 1: Online Play (Server + WebSocket Transport)
+## Phase 1: Online Play (Convex backend + SvelteKit frontend)
 
-### 1.1 Extract a game server module
-- [ ] Create `server/gameRoom.js`: owns one live game instance, validates
-      incoming moves, calls engine functions, and handles the `{ state, events }`
-      return value — stamps `seq`, persists durable events, broadcasts to clients
-- [ ] Move randomness (shuffle) and AI calls into the server; clients never
-      see other players' hidden hands
-- [ ] `index.js` becomes a "local" client that talks to gameRoom in-process
-      (no network yet — this is the seam you'll later replace with WebSocket)
+Backend is Convex (mutations, reactive queries, actions). No WebSocket server —
+Convex reactive queries push state to clients automatically.
 
-### 1.2 Add a WebSocket transport
-- [ ] Add `server/wsServer.js` using the `ws` package (or `socket.io` if
-      reconnection / fallback matters)
-- [ ] Each connected client gets a session; server routes `PLAY_CARD` messages
-      to the correct game room and fans out events
-- [ ] Implement basic reconnection: client sends session token on reconnect;
-      server replays missed events by `seq` number
+### 1.1 Lobby + waiting room
+- [x] Schema: all collections defined in `convex/schema.ts` (including `table_messages`)
+- [x] `lobby.ts`: presence heartbeat, online-player list, lobby chat
+- [x] `games.ts`: `createTable`, `joinTable`, `listActiveTables`, `getTable`
+- [x] `games.ts`: `getTableMessages`, `sendTableMessage` (per-table chat)
+- [x] Web: login page, lobby (3-pane: online players / chat / tables), table shell page
+- [x] Web: waiting room UI — seat grid, sidebar player list, table chat
 
-### 1.3 Port the console client to use the transport
-- [ ] Refactor `index.js` / `display.js` so they consume the event stream
-      rather than reading state directly from the engine
-- [ ] Console client connects to localhost WebSocket in dev, remote in prod
-- [ ] Human input still works via stdin; output driven by events
+### 1.2 Game initialisation
+- [ ] `convex/games.ts` — `startGame` internal mutation: called when the last
+      seat is filled; deals cards, writes `game_live_state`, `game_public_state`,
+      `player_hands`, sets `games.status = "active"`, stores `initialState`
+- [ ] Auto-trigger: call `startGame` at the end of `joinTable` when
+      `seats.length === game.seatCount`
 
-### 1.4 AI players as server-side bots
-- [ ] Bot seats run entirely on the server; no client needed
-- [ ] Server calls `ismcts.chooseCard` or `greedy.chooseCard` and injects the
-      result as if a client sent `PLAY_CARD`
-- [ ] Bot "think time" can be simulated with a short delay for UI feel
+### 1.3 Reactive game state query
+- [ ] `convex/games.ts` — `getMyGameState` query: returns `game_public_state`
+      + caller's own `player_hands` row (never another player's hand)
+- [ ] Web: subscribe to `getMyGameState` in the table page; replace the
+      "game in progress" placeholder with hand + trick + scores
 
-### 1.5 Persist game records
-- [ ] On game start: write a `games` row with `initialState`
-- [ ] On each move: append a `moves` row
-- [ ] On game end: update `games.endedAt` and `games.result`
+### 1.4 Apply moves
+- [ ] `convex/games.ts` — `applyMove` mutation: authenticate caller → verify
+      it is their turn → read `game_live_state` → call engine → write
+      `game_live_state`, `game_public_state`, each `player_hands` → append
+      `game_moves` → if game over: write result, delete live docs; else if
+      next seat is a bot: schedule `applyBotMoves` action
+- [ ] Web: send `PLAY_CARD` on card click; grey out illegal cards (mirror
+      legal-moves logic client-side as a hint; server still validates)
+
+### 1.5 Bot moves
+- [ ] `convex/games.ts` — `applyBotMoves` action: loop — call ISMCTS for
+      each bot seat → call internal mutation to commit move → stop when it
+      is a human player's turn again
 
 ---
 
 ## Phase 2: Web UI
 
-### 2.1 Set up the web app shell
-- [ ] Create `web/` directory with a minimal SPA (plain HTML/JS or a light
-      framework — decide when the time comes; Svelte is a good fit for
-      reactive game state)
-- [ ] Web app connects to the same WebSocket server as the console client
-- [ ] Shared event schema means zero server changes are needed
+### 2.1 Web app shell
+- [x] SvelteKit app in `web/` deployed to Vercel
+- [x] Login, lobby, and table shell pages exist
+- [x] Subscribes to reactive Convex queries via `watchQuery` helper
 
-### 2.2 Static state rendering
-- [ ] Render current hands (face-down for opponents, face-up for self),
-      current trick, scores, and whose turn it is
-- [ ] Cards are SVG or image assets; suit symbols already exist in engine
-      (♣ ♦ ♥ ♠)
+### 2.2 Static game state rendering (blocked on 1.3)
+- [ ] Render own hand face-up, opponents' seat slots face-down
+- [ ] Render current trick in the centre, scores per seat, turn indicator
+- [ ] Cards as SVG or styled elements; suit symbols from engine (♣ ♦ ♥ ♠)
 
 ### 2.3 Animated event handling
 - [ ] Map each event type to a UI animation or transition:
