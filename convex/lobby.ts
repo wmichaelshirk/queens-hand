@@ -118,7 +118,7 @@ export const sendMessage = mutation({
       .withIndex("by_ts")
       .order("asc")
       .take(MAX_MESSAGES + 1);
-    if (over.length > MAX_MESSAGES) {
+    if (over.length > MAX_MESSAGES && over[0]) {
       await ctx.db.delete(over[0]._id);
     }
   },
