@@ -2,7 +2,7 @@
 
 ## Project context
 
-Two card game engines (Slobberhannes, Strohmandeln) written in TypeScript.
+Multiple card game engines (Slobberhannes, Strohmandeln) written in TypeScript.
 Pure functional engines — `applyMove(state, move)` returns `{ state, events }`.
 Two AI implementations: ISMCTS (strong, slower) and Greedy (fast).
 Phase 0 (TypeScript migration, event model, type system) is complete.
@@ -47,7 +47,7 @@ no separate Realtime layer to configure, no RLS policies to write.
 | Per-player state filtering | TypeScript query functions (return only what caller should see) |
 | Move validation + AI | Mutations (transactional) + Actions (long-running, for ISMCTS) |
 | Transient chat & presence | In-memory via Convex presence; or lightweight chat documents |
-| Static web hosting | Cloudflare Pages (free, no credit card, global CDN) |
+| Static web hosting | Vercel (free tier, auto-deploys from GitHub) |
 
 ### Why Convex over Supabase
 
@@ -255,8 +255,9 @@ No strong preference. Svelte is a good fit (fine-grained reactivity, small
 bundle, aligns well with Convex's reactive model). React is familiar. Decision
 deferred to Phase 2; the Convex client SDK supports both.
 
-Static assets served from Cloudflare Pages (free, no credit card, global CDN,
-deploys automatically from GitHub).
+Static assets served from Vercel (free tier, auto-deploys from GitHub on every
+push to `main`). Connected via GitHub; `PUBLIC_CONVEX_URL` set in Vercel
+environment variables pointing to the production Convex deployment.
 
 ---
 
@@ -281,4 +282,4 @@ Convex functions — no duplication, no separate build step.
 4. **`applyMove` mutation** — Core server loop; testable via Convex dashboard
 5. **`getMyGameState` query** — Verify reactive push and filtering end-to-end
 6. **Bot action** — `applyBotMoves` action; verify AI plays are applied server-side
-7. **Web shell (Phase 2.1)** — Minimal page on Cloudflare Pages; subscribes to query
+7. **Web shell (Phase 2.1)** — Minimal page on Vercel; subscribes to query

@@ -479,6 +479,8 @@
     background: #e94560;
     border-color: #e94560;
     color: #fff;
+    width: 100%;
+    margin-top: 0.4rem;
   }
 
   :global(.btn-primary:hover) {

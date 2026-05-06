@@ -6,7 +6,7 @@
 - A [Convex](https://convex.dev) account (free, no credit card)
 - A [Resend](https://resend.com) account for magic-link emails (free tier: 100 emails/day)
 - A Google Cloud project for OAuth (free)
-- A [Cloudflare Pages](https://pages.cloudflare.com) account for the web frontend (free)
+- A [Vercel](https://vercel.com) account for the web frontend (free, log in with GitHub)
 - `gh` CLI for GitHub: `brew install gh && gh auth login`
 
 ---
@@ -47,7 +47,7 @@ In the Convex dashboard (dashboard.convex.dev → your project → Settings → 
 | `AUTH_GOOGLE_ID` | From Google Cloud Console OAuth credentials |
 | `AUTH_GOOGLE_SECRET` | From Google Cloud Console OAuth credentials |
 | `AUTH_RESEND_KEY` | From resend.com → API Keys |
-| `SITE_URL` | Your Cloudflare Pages URL (e.g. `https://queens-hand.pages.dev`) |
+| `SITE_URL` | Your Vercel URL (e.g. `https://queens-hand.vercel.app`) |
 
 ---
 
@@ -72,24 +72,17 @@ In the Convex dashboard (dashboard.convex.dev → your project → Settings → 
 
 ---
 
-## 5 — Deploy web frontend to Cloudflare Pages
+## 5 — Deploy web frontend to Vercel
 
-```bash
-cd web
-npm run build
-```
+1. Go to [vercel.com](https://vercel.com) → **Add New → Project**
+2. Import the `queens-hand` GitHub repo
+3. Set **Root Directory** to `web`
+4. Vercel auto-detects SvelteKit — no build settings to change
+5. Under **Environment Variables**, add:
+   - `PUBLIC_CONVEX_URL` = your production Convex URL (e.g. `https://fast-albatross-205.convex.cloud`)
+6. Click **Deploy**
 
-Then in Cloudflare Pages dashboard:
-1. Create a new project → Connect to GitHub → select `queens-hand`
-2. Build settings:
-   - Framework: **SvelteKit**
-   - Build command: `npm run build`
-   - Build output directory: `build`
-   - Root directory: `web`
-3. Environment variables:
-   - `PUBLIC_CONVEX_URL` = your Convex deployment URL (from dashboard)
-
-Cloudflare Pages will auto-deploy on every push to `main`.
+Vercel auto-deploys on every push to `main`.
 
 ---
 
