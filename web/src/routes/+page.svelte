@@ -1,59 +1,35 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
-  import { isAuthenticated, isLoggedIn, guestSession, signIn, signInAsGuest, signOut, convex, watchQuery } from "$lib/convex";
-  import { api } from "$convex/_generated/api";
+  import { goto } from "$app/navigation";
+  import { browser } from "$app/environment";
+  import {
+    isAuthenticated, isLoggedIn, guestSession,
+    signOut, convex, watchQuery,
+  } from "$lib/convex";
 
-  // ── Auth ──────────────────────────────────────────────────────────────────
+  // ── Auth guard ────────────────────────────────────────────────────────────────
 
-  let email = $state("");
-  let emailSent = $state(false);
-  let authError = $state("");
+  $effect(() => {
+    if (browser && !$isLoggedIn) goto("/login");
+  });
 
-  let guestName = $state("");
-  let guestError = $state("");
+  // ── Player record ─────────────────────────────────────────────────────────────
 
-  async function loginAsGuest() {
-    guestError = "";
-    if (!guestName.trim()) { guestError = "Enter a name to continue."; return; }
-    try {
-      await signInAsGuest(guestName.trim());
-    } catch (e: any) {
-      guestError = e?.message ?? "Something went wrong.";
-    }
-  }
-
-  async function loginWithGoogle() {
-    authError = "";
-    await signIn("google");
-  }
-
-  async function loginWithEmail() {
-    authError = "";
-    if (!email.trim()) return;
-    const ok = await signIn("resend", { email: email.trim() });
-    if (!ok) emailSent = true; // redirect not issued → email sent
-  }
-
-  // ── Player record ─────────────────────────────────────────────────────────
-
-  // Ensure a players row exists after first login (auth users only; guests are created on sign-in)
   $effect(() => {
     if ($isAuthenticated) {
       convex.mutation("auth:ensurePlayer" as any, {}).catch(() => {});
     }
   });
 
-  const me = watchQuery<{ _id: string; displayName: string } | null>(
-    "auth:getMe" as any,
-    {}
+  const me = watchQuery<{ _id: string; displayName: string } | null>("auth:getMe" as any, {});
+
+  let currentPlayer = $derived(
+    $me ?? ($guestSession
+      ? { _id: $guestSession.playerId, displayName: $guestSession.displayName }
+      : null)
   );
 
-  // ── Presence ──────────────────────────────────────────────────────────────
+  // ── Presence ──────────────────────────────────────────────────────────────────
 
-  // Simple heartbeat-based presence: store online user IDs in memory on the
-  // client via Convex Presence pattern. We keep it lightweight for the MVP:
-  // each client sends a "ping" mutation every 30 s; the query returns players
-  // whose lastSeen is within 60 s.
   let presenceInterval: ReturnType<typeof setInterval>;
 
   $effect(() => {
@@ -68,46 +44,16 @@
   });
 
   const onlinePlayers = watchQuery<Array<{ _id: string; displayName: string }>>(
-    "lobby:getOnline" as any,
-    {}
+    "lobby:getOnline" as any, {}
   );
 
-  // ── Chat ──────────────────────────────────────────────────────────────────
-
-  const messages = watchQuery<
-    Array<{ _id: string; displayName: string; text: string; ts: number }>
-  >("lobby:getMessages" as any, {});
-
-  let chatText = $state("");
-  let chatEl: HTMLDivElement;
-
-  $effect(() => {
-    if ($messages && chatEl) {
-      chatEl.scrollTop = chatEl.scrollHeight;
-    }
-  });
-
-  async function sendMessage() {
-    const text = chatText.trim();
-    if (!text) return;
-    chatText = "";
-    await convex.mutation("lobby:sendMessage" as any, { text, guestUserId: $guestSession?.userId });
-  }
-
-  function onKeydown(e: KeyboardEvent) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
-  }
-
-  // ── Display name editing ──────────────────────────────────────────────────
+  // ── Display name editing ──────────────────────────────────────────────────────
 
   let editingName = $state(false);
   let newName = $state("");
 
   function startEditName() {
-    newName = $me?.displayName ?? "";
+    newName = currentPlayer?.displayName ?? "";
     editingName = true;
   }
 
@@ -116,227 +62,259 @@
     await convex.mutation("auth:updateDisplayName" as any, { displayName: newName.trim() });
     editingName = false;
   }
+
+  // ── Chat ──────────────────────────────────────────────────────────────────────
+
+  const messages = watchQuery<
+    Array<{ _id: string; displayName: string; text: string; ts: number }>
+  >("lobby:getMessages" as any, {});
+
+  let chatText = $state("");
+  let chatEl = $state<HTMLDivElement | undefined>(undefined);
+
+  $effect(() => {
+    if ($messages && chatEl) chatEl.scrollTop = chatEl.scrollHeight;
+  });
+
+  async function sendMessage() {
+    const text = chatText.trim();
+    if (!text) return;
+    chatText = "";
+    await convex.mutation("lobby:sendMessage" as any, {
+      text,
+      guestUserId: $guestSession?.userId,
+    });
+  }
+
+  function onChatKeydown(e: KeyboardEvent) {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  }
+
+  // ── Tables ────────────────────────────────────────────────────────────────────
+
+  type TableSeat = { seatIndex: number; playerId: string; displayName: string; isBot: boolean };
+  type ActiveTable = {
+    _id: string;
+    gameType: "slobberhannes" | "strohmandeln";
+    status: "waiting" | "active";
+    seatCount: number;
+    createdAt: number;
+    seats: TableSeat[];
+  };
+
+  const activeTables = watchQuery<ActiveTable[]>("games:listActiveTables" as any, {});
+
+  const GAME_NAMES: Record<string, string> = {
+    slobberhannes: "Slobberhannes",
+    strohmandeln: "Strohmandeln",
+  };
+
+  let newTableGameType = $state<"slobberhannes" | "strohmandeln">("slobberhannes");
+  let creatingTable = $state(false);
+
+  async function createTable() {
+    if (creatingTable) return;
+    creatingTable = true;
+    try {
+      await convex.mutation("games:createTable" as any, {
+        gameType: newTableGameType,
+        guestUserId: $guestSession?.userId,
+      });
+    } finally {
+      creatingTable = false;
+    }
+  }
+
+  async function joinTable(gameId: string) {
+    await convex.mutation("games:joinTable" as any, {
+      gameId,
+      guestUserId: $guestSession?.userId,
+    });
+  }
 </script>
 
-{#if !$isLoggedIn}
-  <!-- ── Login screen ─────────────────────────────────────────────────── -->
-  <main class="login-wrap">
-    <div class="login-card">
-      <h1>The Queen's Hand</h1>
-      <p class="tagline">Card games with friends</p>
+{#if $isLoggedIn}
+<div class="lobby">
 
-      {#if authError}
-        <p class="error">{authError}</p>
+  <!-- Column 1: Players online -->
+  <aside class="pane players">
+    <div class="pane-top">
+      <h2>The Queen's Hand</h2>
+      {#if currentPlayer}
+        <div class="me">
+          {#if $guestSession}
+            <span class="name">{currentPlayer.displayName}</span>
+            <span class="badge">guest</span>
+          {:else if editingName}
+            <input class="input sm" bind:value={newName} onkeydown={(e) => e.key === "Enter" && saveName()} />
+            <button class="link-btn" onclick={saveName}>save</button>
+          {:else}
+            <span class="name">{currentPlayer.displayName}</span>
+            <button class="link-btn" onclick={startEditName}>edit</button>
+          {/if}
+        </div>
       {/if}
-
-      <button class="btn btn-google" onclick={loginWithGoogle}>
-        <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-          <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.616z"/>
-          <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/>
-          <path fill="#FBBC05" d="M3.964 10.706A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.706V4.962H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.038l3.007-2.332z"/>
-          <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.962L3.964 7.294C4.672 5.163 6.656 3.58 9 3.58z"/>
-        </svg>
-        Continue with Google
-      </button>
-
-      <div class="divider"><span>or</span></div>
-
-      {#if emailSent}
-        <p class="email-sent">
-          Check your inbox — a sign-in link has been sent to <strong>{email}</strong>.
-        </p>
-      {:else}
-        <form onsubmit={(e) => { e.preventDefault(); loginWithEmail(); }}>
-          <input
-            type="email"
-            placeholder="your@email.com"
-            bind:value={email}
-            required
-            class="input"
-          />
-          <button type="submit" class="btn btn-primary">Send sign-in link</button>
-        </form>
-      {/if}
-
-      <div class="divider"><span>or</span></div>
-
-      <form onsubmit={(e) => { e.preventDefault(); loginAsGuest(); }}>
-        {#if guestError}
-          <p class="error">{guestError}</p>
-        {/if}
-        <input
-          type="text"
-          placeholder="Choose a name…"
-          bind:value={guestName}
-          maxlength="32"
-          class="input"
-        />
-        <button type="submit" class="btn btn-guest">Play as Guest</button>
-      </form>
-      <p class="guest-note">Guest sessions don't carry rankings or history.</p>
+      <button class="btn sm" onclick={signOut}>Sign out</button>
     </div>
+
+    <h3 class="label">Online now</h3>
+    <ul class="player-list">
+      {#if $onlinePlayers && $onlinePlayers.length > 0}
+        {#each $onlinePlayers as p (p._id)}
+          <li class:me={p._id === currentPlayer?._id}>
+            {p.displayName}
+            {#if p._id === currentPlayer?._id}<span class="you">(you)</span>{/if}
+          </li>
+        {/each}
+      {:else}
+        <li class="muted">No one else is here yet.</li>
+      {/if}
+    </ul>
+  </aside>
+
+  <!-- Column 2: Chat -->
+  <main class="pane chat">
+    <h3 class="label">Lobby</h3>
+
+    <div class="messages" bind:this={chatEl}>
+      {#if $messages && $messages.length > 0}
+        {#each $messages as msg (msg._id)}
+          <div class="msg" class:own={msg.displayName === currentPlayer?.displayName}>
+            <span class="msg-name">{msg.displayName}</span>
+            <span class="msg-text">{msg.text}</span>
+          </div>
+        {/each}
+      {:else}
+        <p class="muted">No messages yet. Say hi!</p>
+      {/if}
+    </div>
+
+    <form class="chat-form" onsubmit={(e) => { e.preventDefault(); sendMessage(); }}>
+      <input class="input" placeholder="Say something…" bind:value={chatText} onkeydown={onChatKeydown} />
+      <button type="submit" class="btn accent-sm">Send</button>
+    </form>
   </main>
 
-{:else}
-  <!-- ── Lobby ─────────────────────────────────────────────────────────── -->
-  {@const currentPlayer = $me ?? ($guestSession ? { _id: $guestSession.playerId, displayName: $guestSession.displayName } : null)}
-  <div class="lobby">
+  <!-- Column 3: Tables -->
+  <section class="pane tables">
+    <h3 class="label">Tables</h3>
 
-    <!-- Sidebar: who's online + user controls -->
-    <aside class="sidebar">
-      <div class="sidebar-header">
-        <h2>The Queen's Hand</h2>
-        {#if currentPlayer}
-          <div class="me">
-            {#if $guestSession}
-              <span class="display-name">{currentPlayer.displayName}</span>
-              <span class="guest-badge">guest</span>
-            {:else if editingName}
-              <input
-                class="input input-sm"
-                bind:value={newName}
-                onkeydown={(e) => e.key === "Enter" && saveName()}
-              />
-              <button class="btn-link" onclick={saveName}>save</button>
-            {:else}
-              <span class="display-name">{currentPlayer.displayName}</span>
-              <button class="btn-link" onclick={startEditName}>edit</button>
-            {/if}
-          </div>
-        {/if}
-        <button class="btn btn-sm" onclick={signOut}>Sign out</button>
+    <div class="table-list">
+
+      <!-- Create card -->
+      <div class="table-card create">
+        <div class="card-title">New Table</div>
+        <div class="game-picker">
+          <button
+            class="pick-btn"
+            class:selected={newTableGameType === "slobberhannes"}
+            onclick={() => newTableGameType = "slobberhannes"}
+          >Slobberhannes</button>
+          <button
+            class="pick-btn"
+            class:selected={newTableGameType === "strohmandeln"}
+            onclick={() => newTableGameType = "strohmandeln"}
+          >Strohmandeln</button>
+        </div>
+        <div class="card-footer">
+          <button class="btn accent-sm" onclick={createTable} disabled={creatingTable}>
+            {creatingTable ? "Creating…" : "Create Table"}
+          </button>
+        </div>
       </div>
 
-      <h3>Online now</h3>
-      <ul class="player-list">
-        {#if $onlinePlayers && $onlinePlayers.length > 0}
-          {#each $onlinePlayers as p (p._id)}
-            <li class:is-me={p._id === currentPlayer?._id}>
-              {p.displayName}
-              {#if p._id === currentPlayer?._id}<span class="you-tag">(you)</span>{/if}
-            </li>
-          {/each}
-        {:else}
-          <li class="empty">No one else is here yet.</li>
-        {/if}
-      </ul>
-    </aside>
-
-    <!-- Main: lobby chat -->
-    <main class="chat-pane">
-      <h3>Lobby</h3>
-
-      <div class="messages" bind:this={chatEl}>
-        {#if $messages && $messages.length > 0}
-          {#each $messages as msg (msg._id)}
-            <div class="message" class:own={msg.displayName === currentPlayer?.displayName}>
-              <span class="msg-name">{msg.displayName}</span>
-              <span class="msg-text">{msg.text}</span>
+      <!-- Active tables -->
+      {#if $activeTables}
+        {#each $activeTables as table (table._id)}
+          {@const myId = currentPlayer?._id}
+          {@const isSeated = table.seats.some((s) => s.playerId === myId)}
+          {@const isFull = table.seats.length >= table.seatCount}
+          <div class="table-card">
+            <div class="card-header">
+              <span class="card-title">{GAME_NAMES[table.gameType]}</span>
+              <span class="status" class:live={table.status === "active"}>
+                {table.status === "active" ? "live" : "waiting"}
+              </span>
             </div>
-          {/each}
-        {:else}
-          <p class="empty">No messages yet. Say hi!</p>
-        {/if}
-      </div>
+            <div class="seats">
+              {#each Array(table.seatCount) as _, i}
+                {@const seat = table.seats.find((s) => s.seatIndex === i)}
+                <span class="seat" class:filled={!!seat} class:mine={seat?.playerId === myId}>
+                  {seat ? seat.displayName : "─"}
+                </span>
+              {/each}
+            </div>
+            <div class="card-footer">
+              {#if isSeated}
+                <button class="btn accent-sm">Enter</button>
+              {:else if !isFull && table.status === "waiting"}
+                <button class="btn accent-sm" onclick={() => joinTable(table._id)}>Join</button>
+              {:else}
+                <button class="btn sm" disabled>{table.status === "active" ? "Live" : "Full"}</button>
+              {/if}
+            </div>
+          </div>
+        {/each}
+      {/if}
 
-      <form class="chat-form" onsubmit={(e) => { e.preventDefault(); sendMessage(); }}>
-        <input
-          class="input"
-          placeholder="Say something…"
-          bind:value={chatText}
-          onkeydown={onKeydown}
-        />
-        <button type="submit" class="btn btn-primary">Send</button>
-      </form>
-    </main>
-  </div>
+    </div>
+  </section>
+
+</div>
 {/if}
 
 <style>
-  /* ── Login ──────────────────────────────────────────────────────────────── */
-  .login-wrap {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 100vh;
-    padding: 1rem;
-  }
-
-  .login-card {
-    background: #16213e;
-    border: 1px solid #0f3460;
-    border-radius: 12px;
-    padding: 2.5rem 2rem;
-    width: 100%;
-    max-width: 380px;
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-  }
-
-  .login-card h1 {
-    font-size: 1.6rem;
-    color: #e94560;
-    text-align: center;
-  }
-
-  .tagline {
-    text-align: center;
-    color: #888;
-    font-size: 0.9rem;
-  }
-
-  .error {
-    color: #e94560;
-    font-size: 0.85rem;
-  }
-
-  .email-sent {
-    font-size: 0.9rem;
-    color: #aaa;
-    text-align: center;
-  }
-
-  .divider {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    color: #555;
-    font-size: 0.8rem;
-  }
-
-  .divider::before,
-  .divider::after {
-    content: "";
-    flex: 1;
-    height: 1px;
-    background: #333;
-  }
-
-  /* ── Lobby layout ───────────────────────────────────────────────────────── */
   .lobby {
     display: grid;
-    grid-template-columns: 220px 1fr;
+    grid-template-columns: 200px 1fr 300px;
     height: 100vh;
+    overflow: hidden;
   }
 
-  .sidebar {
+  /* ── Panes ───────────────────────────────────────────────────────────────── */
+  .pane {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .pane.players {
     background: #16213e;
     border-right: 1px solid #0f3460;
     padding: 1.25rem 1rem;
-    display: flex;
-    flex-direction: column;
     gap: 1rem;
     overflow-y: auto;
   }
 
-  .sidebar-header {
+  .pane.chat {
+    padding: 1.25rem;
+    gap: 0.75rem;
+  }
+
+  .pane.tables {
+    background: #16213e;
+    border-left: 1px solid #0f3460;
+    padding: 1.25rem 1rem;
+    gap: 1rem;
+    overflow-y: auto;
+  }
+
+  .label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #666;
+    flex-shrink: 0;
+  }
+
+  /* ── Players pane ────────────────────────────────────────────────────────── */
+  .pane-top {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
   }
 
-  .sidebar-header h2 {
+  .pane-top h2 {
     font-size: 1rem;
     color: #e94560;
   }
@@ -348,15 +326,14 @@
     font-size: 0.85rem;
   }
 
-  .display-name {
-    font-weight: 600;
-  }
+  .name { font-weight: 600; }
 
-  .sidebar h3 {
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: #666;
+  .badge {
+    font-size: 0.7rem;
+    background: #333;
+    color: #888;
+    border-radius: 4px;
+    padding: 0.1rem 0.35rem;
   }
 
   .player-list {
@@ -368,61 +345,43 @@
 
   .player-list li {
     font-size: 0.9rem;
-    padding: 0.25rem 0;
+    padding: 0.2rem 0;
     color: #ccc;
   }
 
-  .player-list li.is-me {
-    color: #e94560;
-  }
+  .player-list li.me { color: #e94560; }
 
-  .you-tag {
+  .you {
     font-size: 0.75rem;
     color: #666;
     margin-left: 0.25rem;
   }
 
-  /* ── Chat pane ──────────────────────────────────────────────────────────── */
-  .chat-pane {
-    display: flex;
-    flex-direction: column;
-    padding: 1.25rem;
-    gap: 1rem;
-    overflow: hidden;
-  }
-
-  .chat-pane h3 {
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: #666;
-  }
-
+  /* ── Chat pane ───────────────────────────────────────────────────────────── */
   .messages {
     flex: 1;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
-    padding: 0.5rem 0;
+    padding: 0.25rem 0;
+    min-height: 0;
   }
 
-  .message {
+  .msg {
     display: flex;
     gap: 0.5rem;
     font-size: 0.9rem;
     line-height: 1.4;
   }
 
-  .message.own .msg-name {
-    color: #e94560;
-  }
+  .msg.own .msg-name { color: #e94560; }
 
   .msg-name {
     font-weight: 600;
     color: #888;
     white-space: nowrap;
-    min-width: fit-content;
+    flex-shrink: 0;
   }
 
   .msg-text {
@@ -433,34 +392,129 @@
   .chat-form {
     display: flex;
     gap: 0.5rem;
+    flex-shrink: 0;
   }
 
   .chat-form .input {
     flex: 1;
+    min-width: 0;
   }
 
-  /* ── Shared components ──────────────────────────────────────────────────── */
-  :global(.input) {
+  /* ── Tables pane ─────────────────────────────────────────────────────────── */
+  .table-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .table-card {
+    background: #1a2a4a;
+    border: 1px solid #0f3460;
+    border-radius: 8px;
+    padding: 0.875rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.625rem;
+    flex-shrink: 0;
+  }
+
+  .table-card.create {
+    border-style: dashed;
+    border-color: #2a4a70;
+    background: #141e33;
+  }
+
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .card-title {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #ccc;
+  }
+
+  .status {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    background: #2a3a50;
+    color: #888;
+    border-radius: 4px;
+    padding: 0.1rem 0.4rem;
+  }
+
+  .status.live {
+    background: #1a3a1a;
+    color: #4caf50;
+  }
+
+  .game-picker {
+    display: flex;
+    gap: 0.4rem;
+  }
+
+  .pick-btn {
+    flex: 1;
+    background: #0f3460;
+    border: 1px solid #1a4a80;
+    border-radius: 5px;
+    color: #888;
+    font-size: 0.78rem;
+    padding: 0.35rem 0.4rem;
+    cursor: pointer;
+  }
+
+  .pick-btn:hover { background: #1a4a80; color: #ccc; }
+  .pick-btn.selected { border-color: #e94560; color: #e0e0e0; }
+
+  .seats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+
+  .seat {
+    font-size: 0.78rem;
+    color: #555;
+    background: #0d1f38;
+    border-radius: 4px;
+    padding: 0.15rem 0.45rem;
+    max-width: 80px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .seat.filled { color: #aaa; background: #1a3050; }
+  .seat.mine   { color: #e94560; background: #2a1520; }
+
+  .card-footer {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  /* ── Shared controls ─────────────────────────────────────────────────────── */
+  .input {
     background: #0f3460;
     border: 1px solid #1a4a80;
     border-radius: 6px;
     color: #e0e0e0;
     padding: 0.5rem 0.75rem;
     font-size: 0.9rem;
-    width: 100%;
     outline: none;
+    box-sizing: border-box;
   }
 
-  :global(.input:focus) {
-    border-color: #e94560;
-  }
+  .input:focus { border-color: #e94560; }
+  .input.sm    { padding: 0.25rem 0.5rem; font-size: 0.85rem; }
 
-  :global(.input-sm) {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.85rem;
-  }
-
-  :global(.btn) {
+  .btn {
     background: #0f3460;
     border: 1px solid #1a4a80;
     border-radius: 6px;
@@ -471,72 +525,22 @@
     white-space: nowrap;
   }
 
-  :global(.btn:hover) {
-    background: #1a4a80;
-  }
+  .btn:hover    { background: #1a4a80; }
+  .btn:disabled { opacity: 0.45; cursor: default; }
+  .btn.sm       { padding: 0.25rem 0.6rem; font-size: 0.8rem; }
 
-  :global(.btn-primary) {
+  .btn.accent-sm {
     background: #e94560;
     border-color: #e94560;
     color: #fff;
-    width: 100%;
-    margin-top: 0.4rem;
+    padding: 0.35rem 0.75rem;
+    font-size: 0.82rem;
   }
 
-  :global(.btn-primary:hover) {
-    background: #c73652;
-  }
+  .btn.accent-sm:hover    { background: #c73652; }
+  .btn.accent-sm:disabled { opacity: 0.45; cursor: default; }
 
-  :global(.btn-google) {
-    background: #fff;
-    border-color: #ddd;
-    color: #333;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.6rem;
-    width: 100%;
-    padding: 0.6rem 1rem;
-  }
-
-  :global(.btn-google:hover) {
-    background: #f5f5f5;
-  }
-
-  :global(.btn-guest) {
-    background: #2a2a3e;
-    border-color: #444;
-    color: #ccc;
-    width: 100%;
-    margin-top: 0.4rem;
-  }
-
-  :global(.btn-guest:hover) {
-    background: #333350;
-  }
-
-  .guest-note {
-    font-size: 0.78rem;
-    color: #555;
-    text-align: center;
-    margin-top: -0.25rem;
-  }
-
-  .guest-badge {
-    font-size: 0.7rem;
-    background: #333;
-    color: #888;
-    border-radius: 4px;
-    padding: 0.1rem 0.35rem;
-    margin-left: 0.25rem;
-  }
-
-  :global(.btn-sm) {
-    padding: 0.25rem 0.6rem;
-    font-size: 0.8rem;
-  }
-
-  :global(.btn-link) {
+  .link-btn {
     background: none;
     border: none;
     color: #888;
@@ -546,11 +550,9 @@
     padding: 0;
   }
 
-  :global(.btn-link:hover) {
-    color: #ccc;
-  }
+  .link-btn:hover { color: #ccc; }
 
-  .empty {
+  .muted {
     color: #555;
     font-size: 0.85rem;
     font-style: italic;

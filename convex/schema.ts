@@ -24,7 +24,9 @@ export default defineSchema({
 
   games: defineTable({
     gameType: v.union(v.literal("slobberhannes"), v.literal("strohmandeln")),
-    initialState: v.any(),
+    status: v.union(v.literal("waiting"), v.literal("active"), v.literal("finished")),
+    seatCount: v.number(),
+    initialState: v.optional(v.any()),
     settings: v.any(),
     startedAt: v.number(),
     endedAt: v.optional(v.number()),
