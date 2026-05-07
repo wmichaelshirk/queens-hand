@@ -24,7 +24,7 @@ export default defineSchema({
 
   games: defineTable({
     gameType: v.union(v.literal("slobberhannes"), v.literal("strohmandeln")),
-    status: v.union(v.literal("waiting"), v.literal("active"), v.literal("finished")),
+    status: v.union(v.literal("waiting"), v.literal("active"), v.literal("finished"), v.literal("between_hands")),
     seatCount: v.number(),       // max seats
     minSeatCount: v.number(),    // min seats required to start
     creatorPlayerId: v.id("players"),
@@ -33,6 +33,8 @@ export default defineSchema({
     startedAt: v.number(),
     endedAt: v.optional(v.number()),
     result: v.optional(v.any()),
+    // Used during between_hands phase: votes keyed by enginePlayerIndex (string)
+    continuationVotes: v.optional(v.any()),
   }),
 
   game_seats: defineTable({

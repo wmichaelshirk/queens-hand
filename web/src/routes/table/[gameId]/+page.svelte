@@ -66,7 +66,7 @@
   type TableData = {
     _id: string;
     gameType: "slobberhannes" | "strohmandeln";
-    status: "waiting" | "active" | "finished";
+    status: "waiting" | "active" | "finished" | "between_hands";
     seatCount: number;
     minSeatCount: number;
     creatorPlayerId: string;
@@ -113,6 +113,134 @@
     });
   }
 
+  // ── Game state (active game) ───────────────────────────────────────────────────
+
+  type GameSeat = {
+    seatIndex: number;
+    playerId: string;
+    displayName: string;
+    isBot: boolean;
+    enginePlayerIndex: number;
+    handSize: number;
+  };
+
+  type GamePublicState = {
+    currentTrick: { playerIndex: number; card: { suit: string; rank: string } }[];
+    scores: number[];
+    currentTurn: number;
+    trickNum: number;
+    phase: string;
+  };
+
+  type Move =
+    | { type: "PLAY_CARD"; card: { suit: string; rank: string } }
+    | { type: "MAKE_BID"; bid: string }
+    | { type: "PASS_BID" }
+    | { type: "MAKE_ANNOUNCEMENT"; announcement: string };
+
+  type StrawmanPileInfo = { topCard: Card | null; depth: number };
+
+  type ContinuationState = {
+    votes: Record<string, "continue" | "quit">;
+    myVote: "continue" | "quit" | null;
+  };
+
+  type GameState = {
+    publicState: GamePublicState;
+    myHand: Card[];
+    legalMoves: Move[];
+    seats: GameSeat[];
+    gameType: string;
+    strawmen: StrawmanPileInfo[][] | null;  // [enginePlayerIndex][pileIndex], Strohmandeln only
+    continuation: ContinuationState | null;
+  } | null;
+
+  const gameState = watchQuery<GameState>(
+    "games:getMyGameState" as any,
+    { gameId, guestUserId: $guestSession?.userId }
+  );
+
+  const myEngineIndex = $derived(
+    $gameState?.seats.find((s) => s.playerId === myId)?.enginePlayerIndex ?? -1
+  );
+
+  const isMyTurn = $derived(
+    myEngineIndex >= 0 && $gameState?.publicState.currentTurn === myEngineIndex
+  );
+
+  function moveLabel(move: Move): string {
+    if (move.type === "PLAY_CARD") return `${move.card.rank}${move.card.suit}`;
+    if (move.type === "MAKE_BID") return move.bid;
+    if (move.type === "PASS_BID") return "Pass";
+    if (move.type === "MAKE_ANNOUNCEMENT") return move.announcement;
+    return "?";
+  }
+
+  function isRedSuit(suit: string): boolean {
+    return suit === "♥" || suit === "♦";
+  }
+
+  // Suit order: Tarock, ♣, ♦, ♥, ♠ — rank order covers both engines
+  const SUIT_ORDER: Record<string, number> = { T: 0, "♣": 1, "♦": 2, "♥": 3, "♠": 4 };
+  const RANK_ORDER: Record<string, number> = {
+    // Slobberhannes
+    "7": 0, "8": 1, "9": 2, "10": 3, J: 4, Q: 5, K: 6, A: 7,
+    // Strohmandeln suit cards
+    Kn: 8,
+    // Strohmandeln Tarock (I = weakest, ★ = strongest)
+    I: 0, II: 1, III: 2, IV: 3, V: 4, VI: 5, VII: 6, VIII: 7, IX: 8, X: 9,
+    XI: 10, XII: 11, XIII: 12, XIV: 13, XV: 14, XVI: 15, XVII: 16, XVIII: 17,
+    XIX: 18, XX: 19, XXI: 20, "★": 21,
+  };
+
+  type Card = { suit: string; rank: string };
+
+  function sortHand(cards: Card[]): Card[] {
+    return [...cards].sort((a, b) => {
+      const sd = (SUIT_ORDER[a.suit] ?? 99) - (SUIT_ORDER[b.suit] ?? 99);
+      if (sd !== 0) return sd;
+      return (RANK_ORDER[a.rank] ?? 50) - (RANK_ORDER[b.rank] ?? 50);
+    });
+  }
+
+  function isLegalMove(card: Card): boolean {
+    return ($gameState?.legalMoves ?? []).some(
+      (m) => m.type === "PLAY_CARD" && m.card.suit === card.suit && m.card.rank === card.rank
+    );
+  }
+
+  function seatName(engineIndex: number): string {
+    return $gameState?.seats.find((s) => s.enginePlayerIndex === engineIndex)?.displayName ?? `Player ${engineIndex + 1}`;
+  }
+
+  async function playMove(move: Move) {
+    if (busy) return;
+    busy = true;
+    try {
+      await convex.mutation("games:applyMove" as any, {
+        gameId,
+        move,
+        guestUserId: $guestSession?.userId,
+      });
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function voteContinue(vote: "continue" | "quit") {
+    if (busy) return;
+    busy = true;
+    try {
+      await convex.mutation("games:voteContinue" as any, {
+        gameId,
+        vote,
+        guestUserId: $guestSession?.userId,
+      });
+    } finally {
+      busy = false;
+    }
+  }
+
   // ── Actions ────────────────────────────────────────────────────────────────────
 
   let busy = $state(false);
@@ -122,6 +250,20 @@
     busy = true;
     try {
       await convex.mutation("games:sitDown" as any, {
+        gameId,
+        seatIndex,
+        guestUserId: $guestSession?.userId,
+      });
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function addBot(seatIndex: number) {
+    if (busy) return;
+    busy = true;
+    try {
+      await convex.mutation("games:addBot" as any, {
         gameId,
         seatIndex,
         guestUserId: $guestSession?.userId,
@@ -270,10 +412,17 @@
                   <div class="seat-state">{seat.ready ? "✓ ready" : "not ready"}</div>
                 {:else}
                   <div class="seat-empty">Empty</div>
-                  {#if !isSeated && !isFull && $tableData.status === "waiting"}
-                    <button class="btn accent-sm" onclick={() => sitDown(i)} disabled={busy}>
-                      Sit here
-                    </button>
+                  {#if !isFull && $tableData.status === "waiting"}
+                    {#if !isSeated}
+                      <button class="btn accent-sm" onclick={() => sitDown(i)} disabled={busy}>
+                        Sit here
+                      </button>
+                    {/if}
+                    {#if isCreator}
+                      <button class="btn sm" onclick={() => addBot(i)} disabled={busy}>
+                        + Bot
+                      </button>
+                    {/if}
                   {/if}
                 {/if}
               </div>
@@ -336,9 +485,181 @@
 
         </div>
 
-      {:else if $tableData.status === "active"}
-        <div class="game-placeholder">
-          <p class="muted centered">Game in progress — table view coming in Phase 1.</p>
+      {:else if $tableData.status === "active" || $tableData.status === "between_hands"}
+        <div class="game-active">
+          {#if $gameState}
+            <div class="turn-banner" class:my-turn={isMyTurn}>
+              {#if $gameState.continuation}
+                Hand complete
+              {:else}
+                {isMyTurn ? "Your turn" : `Waiting for ${seatName($gameState.publicState.currentTurn)}…`}
+              {/if}
+            </div>
+
+            <div class="scores-row">
+              {#each $gameState.seats as seat (seat.seatIndex)}
+                <div class="score-chip" class:active-turn={seat.enginePlayerIndex === $gameState.publicState.currentTurn}>
+                  <span class="score-name">{seat.displayName}{seat.isBot ? " 🤖" : ""}</span>
+                  <span class="score-val">{$gameState.publicState.scores[seat.enginePlayerIndex] ?? 0}</span>
+                </div>
+              {/each}
+            </div>
+
+            <!-- Between-hands vote (Strohmandeln only) -->
+            {#if $gameState.continuation}
+              {@const cont = $gameState.continuation}
+              <div class="vote-section">
+                <div class="vote-prompt">Hand complete — play another?</div>
+                <div class="vote-grid">
+                  {#each $gameState.seats as seat (seat.seatIndex)}
+                    {@const v = cont.votes[String(seat.enginePlayerIndex)]}
+                    <div class="vote-chip" class:voted={!!v} class:voted-continue={v === 'continue'} class:voted-quit={v === 'quit'}>
+                      <span class="vote-name">{seat.displayName}{seat.isBot ? " 🤖" : ""}</span>
+                      <span class="vote-val">
+                        {v === 'continue' ? '✓ Continue' : v === 'quit' ? '✗ Quit' : '…'}
+                      </span>
+                    </div>
+                  {/each}
+                </div>
+                {#if !cont.myVote}
+                  <div class="vote-actions">
+                    <button class="btn vote-continue-btn" onclick={() => voteContinue('continue')} disabled={busy}>
+                      Continue
+                    </button>
+                    <button class="btn vote-quit-btn" onclick={() => voteContinue('quit')} disabled={busy}>
+                      Quit
+                    </button>
+                  </div>
+                {:else}
+                  <p class="muted centered">Waiting for other players…</p>
+                {/if}
+              </div>
+            {/if}
+
+            <!-- Opponent strawman piles (Strohmandeln only) -->
+            {#if $gameState.strawmen && !$gameState.continuation}
+              {@const opponentIndex = myEngineIndex === 0 ? 1 : 0}
+              {@const opponentName = seatName(opponentIndex)}
+              {@const opponentPiles = $gameState.strawmen[opponentIndex] ?? []}
+              <div class="strawmen-row opponent">
+                <div class="strawmen-label">{opponentName}'s piles</div>
+                <div class="strawmen-piles">
+                  {#each opponentPiles as pile, i (i)}
+                    <div class="straw-pile" class:empty={!pile.topCard}>
+                      {#if pile.topCard}
+                        <div class="straw-top-card" class:red={isRedSuit(pile.topCard.suit)} class:tarock={pile.topCard.suit === 'T'}>
+                          <span class="card-rank">{pile.topCard.rank}</span>
+                          <span class="card-suit">{pile.topCard.suit === 'T' ? '' : pile.topCard.suit}</span>
+                        </div>
+                        {#if pile.depth > 0}
+                          <div class="straw-depth">+{pile.depth}</div>
+                        {/if}
+                      {:else}
+                        <div class="straw-empty">—</div>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
+            <!-- Current trick (hidden during between-hands voting) -->
+            {#if !$gameState.continuation}
+            <div class="trick-area">
+              <div class="trick-label">Trick {$gameState.publicState.trickNum + 1}</div>
+              {#if $gameState.publicState.currentTrick.length > 0}
+                <div class="trick-cards">
+                  {#each $gameState.publicState.currentTrick as play}
+                    <div class="played-card" class:red={isRedSuit(play.card.suit)} class:tarock={play.card.suit === 'T'}>
+                      <span class="card-rank">{play.card.rank}</span>
+                      <span class="card-suit">{play.card.suit === 'T' ? '' : play.card.suit}</span>
+                      <span class="card-player">{seatName(play.playerIndex)}</span>
+                    </div>
+                  {/each}
+                </div>
+              {:else}
+                <div class="trick-empty">—</div>
+              {/if}
+            </div>
+            {/if}<!-- /!continuation -->
+
+            <!-- My strawman piles (Strohmandeln only) -->
+            {#if $gameState.strawmen && !$gameState.continuation}
+              {@const myPiles = $gameState.strawmen[myEngineIndex] ?? []}
+              <div class="strawmen-row mine">
+                <div class="strawmen-label">Your piles</div>
+                <div class="strawmen-piles">
+                  {#each myPiles as pile, i (i)}
+                    <div class="straw-pile" class:empty={!pile.topCard}>
+                      {#if pile.topCard}
+                        <div class="straw-top-card" class:red={isRedSuit(pile.topCard.suit)} class:tarock={pile.topCard.suit === 'T'}>
+                          <span class="card-rank">{pile.topCard.rank}</span>
+                          <span class="card-suit">{pile.topCard.suit === 'T' ? '' : pile.topCard.suit}</span>
+                        </div>
+                        {#if pile.depth > 0}
+                          <div class="straw-depth">+{pile.depth}</div>
+                        {/if}
+                      {:else}
+                        <div class="straw-empty">—</div>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
+            <!-- Available moves -->
+            {#if isMyTurn && $gameState.legalMoves.length > 0}
+              <div class="move-section">
+                <div class="move-prompt">Choose your move:</div>
+                <div class="move-grid">
+                  {#each $gameState.legalMoves as move, i (i)}
+                    <button
+                      class="move-btn"
+                      class:red-card={move.type === 'PLAY_CARD' && isRedSuit(move.card.suit)}
+                      class:tarock-card={move.type === 'PLAY_CARD' && move.card.suit === 'T'}
+                      onclick={() => playMove(move)}
+                      disabled={busy}
+                    >
+                      {moveLabel(move)}
+                    </button>
+                  {/each}
+                </div>
+              </div>
+            {:else if isMyTurn}
+              <p class="muted centered">Loading moves…</p>
+            {/if}
+
+            <!-- Full hand -->
+            {#if $gameState.myHand.length > 0}
+              <div class="hand-section">
+                <div class="hand-label">Your hand</div>
+                <div class="hand-cards">
+                  {#each sortHand($gameState.myHand) as card (`${card.suit}${card.rank}`)}
+                    <div
+                      class="hand-card"
+                      class:red={isRedSuit(card.suit)}
+                      class:legal={isMyTurn && isLegalMove(card)}
+                      class:tarock={card.suit === 'T'}
+                    >
+                      <span class="card-rank">{card.rank}</span>
+                      <span class="card-suit">{card.suit === 'T' ? '' : card.suit}</span>
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
+            <div class="hand-info">
+              {#each $gameState.seats as seat (seat.seatIndex)}
+                {#if seat.playerId !== myId}
+                  <span class="muted">{seat.displayName}: {seat.handSize} cards</span>
+                {/if}
+              {/each}
+            </div>
+          {:else}
+            <p class="muted centered">Loading game…</p>
+          {/if}
         </div>
 
       {:else}
@@ -656,6 +977,339 @@
     flex-direction: column;
     align-items: center;
     gap: 1rem;
+  }
+
+  /* ── Active game board ────────────────────────────────────────────────────── */
+  .game-active {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    width: 100%;
+    max-width: 640px;
+  }
+
+  .turn-banner {
+    text-align: center;
+    font-size: 1rem;
+    font-weight: 600;
+    color: #888;
+    padding: 0.6rem 1rem;
+    background: #12192e;
+    border: 1px solid #0f3460;
+    border-radius: 8px;
+  }
+  .turn-banner.my-turn {
+    color: #e94560;
+    border-color: #e94560;
+    background: #1e1020;
+  }
+
+  .scores-row {
+    display: flex;
+    gap: 0.75rem;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .score-chip {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.15rem;
+    background: #16213e;
+    border: 1px solid #0f3460;
+    border-radius: 8px;
+    padding: 0.5rem 0.9rem;
+    min-width: 70px;
+  }
+  .score-chip.active-turn {
+    border-color: #e94560;
+    background: #1e1020;
+  }
+
+  .score-name {
+    font-size: 0.75rem;
+    color: #888;
+  }
+
+  .score-val {
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: #e0e0e0;
+  }
+
+  .trick-area {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    align-items: center;
+  }
+
+  .trick-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #555;
+  }
+
+  .trick-cards {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .played-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.1rem;
+    background: #1a2a40;
+    border: 1px solid #1a4a80;
+    border-radius: 8px;
+    padding: 0.5rem 0.7rem;
+    min-width: 52px;
+  }
+  .played-card.red { color: #e94560; border-color: #804060; }
+
+  .card-rank { font-size: 1.1rem; font-weight: 700; }
+  .card-suit { font-size: 1.1rem; }
+  .card-player { font-size: 0.65rem; color: #555; margin-top: 0.2rem; }
+
+  .played-card.tarock { color: #b070e0; border-color: #4a2a60; }
+  .trick-empty { font-size: 1.2rem; color: #333; }
+
+  /* ── Strawman piles (Strohmandeln) ───────────────────────────────────────── */
+  .strawmen-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    align-items: center;
+  }
+
+  .strawmen-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #555;
+  }
+
+  .strawmen-piles {
+    display: flex;
+    gap: 0.75rem;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .straw-pile {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+    min-width: 52px;
+  }
+
+  .straw-top-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.1rem;
+    background: #1a2a40;
+    border: 1px solid #1a4a80;
+    border-radius: 8px;
+    padding: 0.5rem 0.7rem;
+    min-width: 52px;
+    text-align: center;
+  }
+
+  .straw-top-card.red   { color: #e94560; border-color: #804060; }
+  .straw-top-card.tarock { color: #b070e0; border-color: #4a2a60; }
+
+  .straw-depth {
+    font-size: 0.68rem;
+    color: #666;
+    letter-spacing: 0.04em;
+  }
+
+  .straw-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.9rem;
+    color: #2a3a50;
+    background: #0d1528;
+    border: 1px dashed #1a2a40;
+    border-radius: 8px;
+    padding: 0.5rem 0.7rem;
+    min-width: 52px;
+    min-height: 48px;
+  }
+
+  .move-btn.tarock-card { color: #b070e0; border-color: #4a2a60; }
+  .move-btn.tarock-card:hover:not(:disabled) { background: #1a0a30; border-color: #e94560; }
+
+  /* ── Between-hands vote (Strohmandeln) ───────────────────────────────────── */
+  .vote-section {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    align-items: center;
+    padding: 1.25rem;
+    background: #12192e;
+    border: 1px solid #1a4a80;
+    border-radius: 10px;
+  }
+
+  .vote-prompt {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #ccc;
+    text-align: center;
+  }
+
+  .vote-grid {
+    display: flex;
+    gap: 0.75rem;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .vote-chip {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.2rem;
+    background: #16213e;
+    border: 1px solid #0f3460;
+    border-radius: 8px;
+    padding: 0.5rem 0.9rem;
+    min-width: 80px;
+  }
+
+  .vote-chip.voted-continue { border-color: #4caf50; background: #0f2a1f; }
+  .vote-chip.voted-quit     { border-color: #e94560; background: #1e1020; }
+
+  .vote-name { font-size: 0.75rem; color: #888; }
+  .vote-val  { font-size: 0.88rem; font-weight: 600; color: #ccc; }
+  .vote-chip.voted-continue .vote-val { color: #4caf50; }
+  .vote-chip.voted-quit .vote-val     { color: #e94560; }
+
+  .vote-actions {
+    display: flex;
+    gap: 0.75rem;
+  }
+
+  .vote-continue-btn {
+    background: #0f3a1f;
+    border-color: #4caf50;
+    color: #4caf50;
+    font-weight: 600;
+    padding: 0.55rem 1.5rem;
+  }
+  .vote-continue-btn:hover:not(:disabled) { background: #1a5a30; }
+
+  .vote-quit-btn {
+    background: #1e1020;
+    border-color: #e94560;
+    color: #e94560;
+    font-weight: 600;
+    padding: 0.55rem 1.5rem;
+  }
+  .vote-quit-btn:hover:not(:disabled) { background: #2a1030; }
+
+  .move-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    align-items: center;
+  }
+
+  .move-prompt {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: #666;
+  }
+
+  .move-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    justify-content: center;
+  }
+
+  .move-btn {
+    background: #0f3460;
+    border: 1px solid #1a4a80;
+    border-radius: 6px;
+    color: #e0e0e0;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    min-width: 52px;
+    text-align: center;
+  }
+  .move-btn:hover:not(:disabled) { background: #1a5a90; border-color: #e94560; }
+  .move-btn:disabled { opacity: 0.45; cursor: default; }
+  .move-btn.red-card { color: #e94560; border-color: #804060; }
+  .move-btn.red-card:hover:not(:disabled) { background: #2a1020; border-color: #e94560; }
+
+  /* ── Full hand display ───────────────────────────────────────────────────── */
+  .hand-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    align-items: center;
+    border-top: 1px solid #0f3460;
+    padding-top: 1.25rem;
+  }
+
+  .hand-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #555;
+  }
+
+  .hand-cards {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    justify-content: center;
+  }
+
+  .hand-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: #101828;
+    border: 1px solid #1a2a40;
+    border-radius: 6px;
+    padding: 0.35rem 0.55rem;
+    min-width: 40px;
+    opacity: 0.5;
+    font-size: 0.88rem;
+  }
+
+  .hand-card.legal {
+    opacity: 1;
+    border-color: #e94560;
+  }
+
+  .hand-card.red { color: #e94560; }
+  .hand-card.tarock { color: #b070e0; border-color: #4a2a60; }
+  .hand-card.tarock.legal { border-color: #e94560; }
+
+  .hand-card .card-rank { font-weight: 600; line-height: 1.2; }
+  .hand-card .card-suit { font-size: 0.8rem; line-height: 1; }
+
+  .hand-info {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    flex-wrap: wrap;
+    font-size: 0.78rem;
   }
 
   /* ── Sidebar ─────────────────────────────────────────────────────────────── */

@@ -4,10 +4,16 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "target": "ESNext",
-    "rootDir": ".",
+    "rootDir": "..",
     "outDir": "../dist/convex",
     "paths": {}
   },
-  "include": ["./**/*.ts"],
+  "include": [
+    "./**/*.ts",
+    "../engines/**/*.ts",
+    "../ai/**/*.ts",
+    "../lib/**/*.ts",
+    "../types.ts"
+  ],
   "exclude": ["node_modules", "_generated"]
 }

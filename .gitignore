@@ -9,3 +9,21 @@ web/.env.local
 web/node_modules/
 web/.svelte-kit/
 web/build/
+
+# TypeScript build artifacts emitted in-place by convex dev / tsc
+engines/**/*.js
+engines/**/*.js.map
+engines/**/*.d.ts
+engines/**/*.d.ts.map
+ai/**/*.js
+ai/**/*.js.map
+ai/**/*.d.ts
+ai/**/*.d.ts.map
+lib/**/*.js
+lib/**/*.js.map
+lib/**/*.d.ts
+lib/**/*.d.ts.map
+*.js
+*.js.map
+*.d.ts
+*.d.ts.map
