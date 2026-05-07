@@ -25,16 +25,53 @@
       : null)
   );
 
+  // ── Presence heartbeat (includes tableId so watchers list works) ───────────────
+
+  let presenceInterval: ReturnType<typeof setInterval>;
+
+  $effect(() => {
+    if ($isLoggedIn && gameId) {
+      const guestUserId = $guestSession?.userId;
+      const ping = () =>
+        convex.mutation("lobby:ping" as any, { guestUserId, tableId: gameId }).catch(() => {});
+      ping();
+      presenceInterval = setInterval(ping, 30_000);
+    }
+    return () => {
+      clearInterval(presenceInterval);
+      // Clear tableId from presence when leaving the page
+      if ($isLoggedIn) {
+        convex.mutation("lobby:ping" as any, {
+          guestUserId: $guestSession?.userId,
+          tableId: undefined,
+        }).catch(() => {});
+      }
+    };
+  });
+
   // ── Table data ─────────────────────────────────────────────────────────────────
 
-  type TableSeat = { seatIndex: number; playerId: string; displayName: string; isBot: boolean };
+  type TableSeat = {
+    seatIndex: number;
+    playerId: string;
+    displayName: string;
+    isBot: boolean;
+    ready: boolean;
+  };
+
+  type Watcher = { userId: string; displayName: string };
+
   type TableData = {
     _id: string;
     gameType: "slobberhannes" | "strohmandeln";
     status: "waiting" | "active" | "finished";
     seatCount: number;
+    minSeatCount: number;
+    creatorPlayerId: string;
+    settings: Record<string, unknown>;
     createdAt: number;
     seats: TableSeat[];
+    watchers: Watcher[];
   };
 
   const GAME_NAMES: Record<string, string> = {
@@ -42,16 +79,116 @@
     strohmandeln: "Strohmandeln",
   };
 
-  // watchQuery is constructed once; gameId won't change for this page
+  const GAME_OPTIONS: Record<string, { key: string; label: string; type: "number"; default: number; min: number; max: number }[]> = {
+    slobberhannes: [
+      { key: "loseAt", label: "Lose at score", type: "number", default: 10, min: 5, max: 30 },
+    ],
+    strohmandeln: [],
+  };
+
   const tableData = watchQuery<TableData | null>("games:getTable" as any, { gameId });
 
   const myId = $derived(currentPlayer?._id);
-  const isSeated = $derived(
-    $tableData?.seats.some((s) => s.playerId === myId) ?? false
+  const mySeat = $derived($tableData?.seats.find((s) => s.playerId === myId) ?? null);
+  const isSeated = $derived(mySeat !== null);
+  const isReady = $derived(mySeat?.ready ?? false);
+  const isCreator = $derived($tableData?.creatorPlayerId === myId);
+  const isFull = $derived(($tableData?.seats.length ?? 0) >= ($tableData?.seatCount ?? 0));
+  const canStart = $derived(
+    !!$tableData &&
+    $tableData.status === "waiting" &&
+    $tableData.seats.length >= $tableData.minSeatCount
   );
-  const isFull = $derived(
-    ($tableData?.seats.length ?? 0) >= ($tableData?.seatCount ?? 4)
-  );
+
+  // ── Settings (creator edits locally, saves on change) ─────────────────────────
+
+  let localSettings = $state<Record<string, unknown>>({});
+
+  $effect(() => {
+    if ($tableData?.settings) {
+      localSettings = { ...$tableData.settings };
+    }
+  });
+
+  function getOption(key: string, def: number): number {
+    const v = localSettings[key];
+    return typeof v === "number" ? v : def;
+  }
+
+  async function saveSettings() {
+    await convex.mutation("games:updateSettings" as any, {
+      gameId,
+      settings: localSettings,
+      guestUserId: $guestSession?.userId,
+    });
+  }
+
+  // ── Actions ────────────────────────────────────────────────────────────────────
+
+  let busy = $state(false);
+
+  async function sitDown(seatIndex: number) {
+    if (busy) return;
+    busy = true;
+    try {
+      await convex.mutation("games:sitDown" as any, {
+        gameId,
+        seatIndex,
+        guestUserId: $guestSession?.userId,
+      });
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function standUp() {
+    if (busy) return;
+    busy = true;
+    try {
+      await convex.mutation("games:standUp" as any, {
+        gameId,
+        guestUserId: $guestSession?.userId,
+      });
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function leaveTable() {
+    if (busy) return;
+    busy = true;
+    try {
+      if (isSeated) {
+        await convex.mutation("games:standUp" as any, {
+          gameId,
+          guestUserId: $guestSession?.userId,
+        });
+      }
+    } finally {
+      busy = false;
+    }
+    goto("/");
+  }
+
+  async function toggleReady() {
+    if (busy) return;
+    busy = true;
+    try {
+      if (isReady) {
+        await convex.mutation("games:unready" as any, {
+          gameId,
+          guestUserId: $guestSession?.userId,
+        });
+      } else {
+        await convex.mutation("games:markReady" as any, {
+          gameId,
+          guestUserId: $guestSession?.userId,
+        });
+      }
+    } finally {
+      busy = false;
+    }
+  }
 
   // ── Table chat ─────────────────────────────────────────────────────────────────
 
@@ -80,23 +217,6 @@
   function onChatKeydown(e: KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   }
-
-  // ── Join ───────────────────────────────────────────────────────────────────────
-
-  let joining = $state(false);
-
-  async function joinTable() {
-    if (joining) return;
-    joining = true;
-    try {
-      await convex.mutation("games:joinTable" as any, {
-        gameId,
-        guestUserId: $guestSession?.userId,
-      });
-    } finally {
-      joining = false;
-    }
-  }
 </script>
 
 {#if $isLoggedIn}
@@ -105,7 +225,7 @@
   <!-- Header -->
   <header class="site-header">
     <div class="header-left">
-      <button class="back-btn" onclick={() => goto("/")}>← Lobby</button>
+      <button class="back-btn" onclick={leaveTable}>← Lobby</button>
       {#if $tableData}
         <span class="table-title">{GAME_NAMES[$tableData.gameType]}</span>
         <span class="status-badge" class:live={$tableData.status === "active"}>
@@ -124,7 +244,7 @@
   <!-- Body -->
   <div class="body">
 
-    <!-- Left: game area -->
+    <!-- Left: game area / waiting room -->
     <main class="game-area">
       {#if !$tableData}
         <p class="muted centered">Loading table…</p>
@@ -132,20 +252,33 @@
       {:else if $tableData.status === "waiting"}
         <div class="waiting-room">
           <h2 class="waiting-title">{GAME_NAMES[$tableData.gameType]}</h2>
-          <p class="waiting-sub">Waiting for players…</p>
 
+          <p class="waiting-sub">
+            {$tableData.seats.length} of {$tableData.seatCount} seated
+            {#if $tableData.minSeatCount < $tableData.seatCount}
+              · {$tableData.minSeatCount} needed to start
+            {/if}
+          </p>
+
+          <!-- Seat grid -->
           <div class="seat-grid">
             {#each Array($tableData.seatCount) as _, i}
               {@const seat = $tableData.seats.find((s) => s.seatIndex === i)}
-              <div class="seat-slot" class:filled={!!seat} class:mine={seat?.playerId === myId}>
+              <div
+                class="seat-slot"
+                class:filled={!!seat}
+                class:mine={seat?.playerId === myId}
+                class:ready={seat?.ready}
+              >
                 <div class="seat-index">Seat {i + 1}</div>
                 {#if seat}
                   <div class="seat-name">{seat.displayName}{seat.isBot ? " 🤖" : ""}</div>
+                  <div class="seat-state">{seat.ready ? "✓ ready" : "not ready"}</div>
                 {:else}
                   <div class="seat-empty">Empty</div>
-                  {#if !isSeated && !isFull}
-                    <button class="btn accent-sm" onclick={joinTable} disabled={joining}>
-                      {joining ? "Joining…" : "Sit here"}
+                  {#if !isSeated && !isFull && $tableData.status === "waiting"}
+                    <button class="btn accent-sm" onclick={() => sitDown(i)} disabled={busy}>
+                      Sit here
                     </button>
                   {/if}
                 {/if}
@@ -153,12 +286,64 @@
             {/each}
           </div>
 
-          {#if isSeated && $tableData.seats.length < $tableData.seatCount}
-            <p class="waiting-hint">
-              Waiting for {$tableData.seatCount - $tableData.seats.length} more
-              player{$tableData.seatCount - $tableData.seats.length === 1 ? "" : "s"}…
-            </p>
+          <!-- Seated player actions -->
+          {#if isSeated}
+            <div class="action-row">
+              <button
+                class="btn ready-btn"
+                class:active={isReady}
+                onclick={toggleReady}
+                disabled={busy || !canStart}
+                title={!canStart ? `Need ${$tableData.minSeatCount} players to start` : ""}
+              >
+                {isReady ? "✓ Ready — click to unready" : canStart ? "Start game" : `Waiting for ${$tableData.minSeatCount - $tableData.seats.length} more player${$tableData.minSeatCount - $tableData.seats.length === 1 ? "" : "s"}…`}
+              </button>
+              <button class="btn sm" onclick={standUp} disabled={busy}>Stand up</button>
+            </div>
           {/if}
+
+          <!-- Creator settings -->
+          {#if isCreator && $tableData.status === "waiting"}
+            {@const options = GAME_OPTIONS[$tableData.gameType] ?? []}
+            {#if options.length > 0}
+              <div class="settings-panel">
+                <div class="settings-title">Table settings <span class="creator-badge">creator</span></div>
+                {#each options as opt}
+                  <label class="setting-row">
+                    <span class="setting-label">{opt.label}</span>
+                    <input
+                      type="number"
+                      class="input number-input"
+                      min={opt.min}
+                      max={opt.max}
+                      value={getOption(opt.key, opt.default)}
+                      oninput={(e) => {
+                        localSettings = { ...localSettings, [opt.key]: Number((e.target as HTMLInputElement).value) };
+                        saveSettings();
+                      }}
+                    />
+                  </label>
+                {/each}
+              </div>
+            {/if}
+          {/if}
+
+          <!-- Non-creator: show current settings read-only -->
+          {#if !isCreator && $tableData.status === "waiting"}
+            {@const options = GAME_OPTIONS[$tableData.gameType] ?? []}
+            {#if options.length > 0}
+              <div class="settings-panel readonly">
+                <div class="settings-title">Table settings</div>
+                {#each options as opt}
+                  <div class="setting-row">
+                    <span class="setting-label">{opt.label}</span>
+                    <span class="setting-value">{getOption(opt.key, opt.default)}</span>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          {/if}
+
         </div>
 
       {:else if $tableData.status === "active"}
@@ -174,13 +359,14 @@
       {/if}
     </main>
 
-    <!-- Right: players + chat -->
+    <!-- Right: players + watchers + chat -->
     <aside class="sidebar">
 
-      <!-- Players at the table -->
+      <!-- At the table -->
       <section class="sidebar-section players-section">
         <h3 class="label">At the table</h3>
         {#if $tableData}
+          <!-- Seated -->
           <ul class="player-list">
             {#each Array($tableData.seatCount) as _, i}
               {@const seat = $tableData.seats.find((s) => s.seatIndex === i)}
@@ -190,13 +376,25 @@
                   <span class="player-label">
                     {seat.displayName}{seat.isBot ? " 🤖" : ""}
                     {#if seat.playerId === myId}<span class="you">(you)</span>{/if}
+                    {#if seat.playerId === $tableData.creatorPlayerId}<span class="creator-dot" title="creator">★</span>{/if}
                   </span>
+                  {#if seat.ready}<span class="ready-dot">✓</span>{/if}
                 {:else}
                   <span class="empty-label">—</span>
                 {/if}
               </li>
             {/each}
           </ul>
+
+          <!-- Watchers -->
+          {#if $tableData.watchers.length > 0}
+            <div class="watchers">
+              <span class="watchers-label">Watching:</span>
+              {#each $tableData.watchers as w (w.userId)}
+                <span class="watcher">{w.displayName}</span>
+              {/each}
+            </div>
+          {/if}
         {:else}
           <p class="muted">Loading…</p>
         {/if}
@@ -230,8 +428,8 @@
       </section>
 
     </aside>
-  </div><!-- .body -->
-</div><!-- .shell -->
+  </div>
+</div>
 {/if}
 
 <style>
@@ -310,9 +508,9 @@
   /* ── Game area ───────────────────────────────────────────────────────────── */
   .game-area {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: center;
-    overflow: auto;
+    overflow-y: auto;
     padding: 2rem;
   }
 
@@ -321,7 +519,7 @@
     flex-direction: column;
     align-items: center;
     gap: 1.5rem;
-    max-width: 480px;
+    max-width: 540px;
     width: 100%;
   }
 
@@ -329,16 +527,19 @@
     font-size: 1.5rem;
     font-weight: 700;
     color: #e94560;
+    margin: 0;
   }
 
   .waiting-sub {
     color: #888;
     font-size: 0.9rem;
+    margin: 0;
   }
 
+  /* ── Seat grid ───────────────────────────────────────────────────────────── */
   .seat-grid {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
     gap: 0.75rem;
     width: 100%;
   }
@@ -347,25 +548,106 @@
     background: #16213e;
     border: 1px solid #0f3460;
     border-radius: 10px;
+    padding: 0.85rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    align-items: center;
+    text-align: center;
+    min-height: 90px;
+    justify-content: center;
+  }
+
+  .seat-slot.filled  { border-color: #1a4a80; }
+  .seat-slot.mine    { border-color: #e94560; background: #1e1020; }
+  .seat-slot.ready   { border-color: #4caf50; }
+
+  .seat-index { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; color: #555; }
+  .seat-name  { font-size: 0.88rem; font-weight: 600; color: #ddd; }
+  .seat-empty { font-size: 0.82rem; color: #444; }
+  .seat-state { font-size: 0.72rem; color: #666; }
+  .seat-slot.ready .seat-state { color: #4caf50; }
+
+  /* ── Action row ──────────────────────────────────────────────────────────── */
+  .action-row {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .ready-btn {
+    background: #0f3460;
+    border: 1px solid #1a4a80;
+    border-radius: 6px;
+    color: #e0e0e0;
+    padding: 0.55rem 1.25rem;
+    font-size: 0.9rem;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .ready-btn:hover:not(:disabled)  { background: #1a4a80; }
+  .ready-btn.active                { background: #1a3a1a; border-color: #4caf50; color: #4caf50; }
+  .ready-btn.active:hover          { background: #143214; }
+  .ready-btn:disabled              { opacity: 0.45; cursor: default; }
+
+  /* ── Settings panel ──────────────────────────────────────────────────────── */
+  .settings-panel {
+    width: 100%;
+    background: #12192e;
+    border: 1px solid #0f3460;
+    border-radius: 10px;
     padding: 1rem;
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
-    align-items: center;
-    text-align: center;
+    gap: 0.75rem;
   }
 
-  .seat-slot.filled { border-color: #1a4a80; }
-  .seat-slot.mine   { border-color: #e94560; background: #1e1020; }
+  .settings-panel.readonly {
+    opacity: 0.7;
+  }
 
-  .seat-index { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: #555; }
-  .seat-name  { font-size: 0.9rem; font-weight: 600; color: #ddd; }
-  .seat-empty { font-size: 0.85rem; color: #444; }
-
-  .waiting-hint {
+  .settings-title {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
     color: #666;
-    font-size: 0.85rem;
-    font-style: italic;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .creator-badge {
+    font-size: 0.65rem;
+    background: #2a1040;
+    color: #b070e0;
+    border-radius: 4px;
+    padding: 0.1rem 0.35rem;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  .setting-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  .setting-label {
+    font-size: 0.88rem;
+    color: #ccc;
+  }
+
+  .setting-value {
+    font-size: 0.88rem;
+    color: #888;
+  }
+
+  .number-input {
+    width: 70px;
+    text-align: center;
   }
 
   .game-placeholder {
@@ -416,12 +698,14 @@
     display: flex;
     flex-direction: column;
     gap: 0.3rem;
+    padding: 0;
+    margin: 0;
   }
 
   .player-row {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.4rem;
     font-size: 0.88rem;
   }
 
@@ -438,13 +722,44 @@
 
   .player-row.mine .player-label { color: #e94560; }
 
-  .player-label { color: #ccc; }
+  .player-label { color: #ccc; flex: 1; }
   .empty-label  { color: #444; }
 
   .you {
     font-size: 0.72rem;
     color: #666;
     margin-left: 0.2rem;
+  }
+
+  .creator-dot {
+    font-size: 0.65rem;
+    color: #b070e0;
+    margin-left: 0.2rem;
+  }
+
+  .ready-dot {
+    font-size: 0.72rem;
+    color: #4caf50;
+    margin-left: auto;
+  }
+
+  /* ── Watchers ────────────────────────────────────────────────────────────── */
+  .watchers {
+    font-size: 0.78rem;
+    color: #555;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    align-items: baseline;
+  }
+
+  .watchers-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; }
+
+  .watcher {
+    color: #666;
+    background: #0d1f38;
+    border-radius: 3px;
+    padding: 0.1rem 0.35rem;
   }
 
   /* ── Chat ────────────────────────────────────────────────────────────────── */

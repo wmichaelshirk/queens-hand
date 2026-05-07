@@ -116,20 +116,14 @@
     if (creatingTable) return;
     creatingTable = true;
     try {
-      await convex.mutation("games:createTable" as any, {
+      const gameId = await convex.mutation("games:createTable" as any, {
         gameType: newTableGameType,
         guestUserId: $guestSession?.userId,
       });
+      goto(`/table/${gameId}`);
     } finally {
       creatingTable = false;
     }
-  }
-
-  async function joinTable(gameId: string) {
-    await convex.mutation("games:joinTable" as any, {
-      gameId,
-      guestUserId: $guestSession?.userId,
-    });
   }
 </script>
 
@@ -233,7 +227,6 @@
         {#each $activeTables as table (table._id)}
           {@const myId = currentPlayer?._id}
           {@const isSeated = table.seats.some((s) => s.playerId === myId)}
-          {@const isFull = table.seats.length >= table.seatCount}
           <div class="table-card">
             <div class="card-header">
               <span class="card-title">{GAME_NAMES[table.gameType]}</span>
@@ -244,19 +237,21 @@
             <div class="seats">
               {#each Array(table.seatCount) as _, i}
                 {@const seat = table.seats.find((s) => s.seatIndex === i)}
-                <span class="seat" class:filled={!!seat} class:mine={seat?.playerId === myId}>
+                <span class="seat" class:filled={!!seat} class:mine={seat?.playerId === myId} class:ready={seat?.ready}>
                   {seat ? seat.displayName : "─"}
                 </span>
               {/each}
             </div>
             <div class="card-footer">
-              {#if isSeated}
-                <button class="btn accent-sm" onclick={() => goto(`/table/${table._id}`)}>Enter</button>
-              {:else if !isFull && table.status === "waiting"}
-                <button class="btn accent-sm" onclick={() => joinTable(table._id)}>Join</button>
-              {:else}
-                <button class="btn sm" disabled>{table.status === "active" ? "Live" : "Full"}</button>
-              {/if}
+              <span class="seat-count">
+                {table.seats.length}/{table.seatCount}
+                {#if table.minSeatCount < table.seatCount}
+                  <span class="seat-min">(min {table.minSeatCount})</span>
+                {/if}
+              </span>
+              <button class="btn accent-sm" onclick={() => goto(`/table/${table._id}`)}>
+                {isSeated ? "Enter" : "Watch"}
+              </button>
             </div>
           </div>
         {/each}
@@ -520,10 +515,21 @@
 
   .seat.filled { color: #aaa; background: #1a3050; }
   .seat.mine   { color: #e94560; background: #2a1520; }
+  .seat.ready  { outline: 1px solid #4caf50; }
 
   .card-footer {
     display: flex;
-    justify-content: flex-end;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .seat-count {
+    font-size: 0.75rem;
+    color: #555;
+  }
+
+  .seat-min {
+    color: #444;
   }
 
   /* ── Shared controls ─────────────────────────────────────────────────────── */
