@@ -91,11 +91,15 @@ Convex reactive queries push state to clients automatically.
 
 ### 1.1 Lobby + waiting room
 - [x] Schema: all collections defined in `convex/schema.ts` (including `table_messages`)
-- [x] `lobby.ts`: presence heartbeat, online-player list, lobby chat
-- [x] `games.ts`: `createTable`, `joinTable`, `listActiveTables`, `getTable`
+- [x] `lobby.ts`: presence heartbeat (with optional `tableId`), online-player list, lobby chat
+- [x] `games.ts`: `createTable`, `sitDown`, `standUp`, `leaveTable`, `markReady`, `unready`,
+      `listActiveTables`, `getTable`, `updateSettings`
 - [x] `games.ts`: `getTableMessages`, `sendTableMessage` (per-table chat)
 - [x] Web: login page, lobby (3-pane: online players / chat / tables), table shell page
-- [x] Web: waiting room UI — seat grid, sidebar player list, table chat
+- [x] Web: waiting room UI — seat grid, sit/stand/ready controls, creator settings panel,
+      sidebar with seated players (connected/away state), watchers list, table chat
+- [x] Variable player counts per game type (`GAME_CONFIG`; Slobberhannes 3–6, Strohmandeln 2)
+- [x] Creator tracking + transfer on stand-up/leave; game-type options sourced from engine exports
 
 ### 1.2 Game initialisation
 - [ ] `convex/games.ts` — `startGame` internal mutation: called when the last
@@ -157,27 +161,37 @@ Convex reactive queries push state to clients automatically.
 
 ## Phase 3: Lobby and Multi-Table
 
+> Note: Phase 3 was originally scoped for a WebSocket server. The actual
+> implementation uses Convex mutations/reactive queries, which handle
+> all of the same concerns without a separate server process.
+
 ### 3.1 Game instance registry
-- [ ] `server/lobby.js`: map of `gameId → gameRoom`; supports creating,
-      joining, and listing open games
-- [ ] Each game room is independent; the server can host many concurrently
-- [ ] Garbage-collect finished rooms after a grace period
+- [x] Convex `games` collection: each row is an independent game room;
+      `createTable`, `listActiveTables`, `getTable`
+- [x] Multiple concurrent tables supported by design
+- [x] `leaveTable` deletes the table (+ messages) when the last seated
+      player leaves; `standUp` alone does not delete
 
 ### 3.2 Lobby protocol
-- [ ] New client message types: `CREATE_GAME`, `JOIN_GAME`, `LIST_GAMES`,
-      `LEAVE_GAME`
-- [ ] Server broadcasts `GAME_CREATED`, `PLAYER_JOINED`, `GAME_STARTED`
-- [ ] Game does not start until all human seats are filled (bots fill the rest)
+- [x] `createTable`, `sitDown`, `standUp`, `leaveTable` cover CREATE/JOIN/LEAVE
+- [x] Reactive `listActiveTables` / `getTable` queries replace server broadcasts —
+      clients receive updates automatically
+- [x] Game starts only when all seated players click "Start game" (`markReady`),
+      and only once the minimum player count is reached
 
 ### 3.3 Lobby UI (web)
-- [ ] Game list screen: open tables, player count, rules variant
-- [ ] Create table: choose player count, loseAt threshold, bot fill policy
-- [ ] Join table by ID or from list
+- [x] Game list: open tables with seat count, min players, live/waiting status
+- [x] Create table: choose game type; scoring-system option for Strohmandeln
+      (sourced directly from engine exports — no duplication)
+- [x] Navigate to table as observer (Watch) or return to seated table (Enter)
+- [ ] Bot fill policy (add bots to empty seats before starting)
 
 ### 3.4 Player identity across tables
-- [ ] Client sends `displayName` + `token` on connect; server resolves to
-      `playerId` (creates player record if new)
-- [ ] Same player can spectate a table they are not seated at (future)
+- [x] Identity via Convex Auth (registered) or guest session (`guest_<token>`
+      in localStorage); player record created on first login
+- [x] Watchers: any player can navigate to a table URL and observe/chat
+      without holding a seat (tracked via presence `tableId` heartbeat)
+- [ ] Spectating a table mid-game (observe active game without a seat)
 
 ---
 
