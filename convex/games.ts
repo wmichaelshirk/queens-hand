@@ -49,7 +49,7 @@ export const listActiveTables = query({
               playerId: seat.playerId as string,
               displayName: player?.displayName ?? "Unknown",
               isBot: player?.isBot ?? false,
-              ready: seat.ready,
+              ready: seat.ready ?? false,
             };
           })
         );
@@ -87,7 +87,7 @@ export const getTable = query({
           playerId: seat.playerId as string,
           displayName: player?.displayName ?? "Unknown",
           isBot: player?.isBot ?? false,
-          ready: seat.ready,
+          ready: seat.ready ?? false,
         };
       })
     );
@@ -256,7 +256,7 @@ export const markReady = mutation({
     const updatedSeats = allSeats.map((s) =>
       s._id === mySeat._id ? { ...s, ready: true } : s
     );
-    const allReady = updatedSeats.every((s) => s.ready);
+    const allReady = updatedSeats.every((s) => s.ready === true);
     if (allReady && updatedSeats.length >= game.minSeatCount) {
       await ctx.db.patch(gameId, { status: "active" });
     }
