@@ -10,8 +10,11 @@ const PRESENCE_TTL_MS = 60_000; // 60 s — users who haven't pinged are "offlin
 // Upsert a presence heartbeat for the current user.
 // Call this on mount and every 30 s.
 export const ping = mutation({
-  args: { guestUserId: v.optional(v.string()) },
-  handler: async (ctx, { guestUserId }) => {
+  args: {
+    guestUserId: v.optional(v.string()),
+    tableId: v.optional(v.id("games")),
+  },
+  handler: async (ctx, { guestUserId, tableId }) => {
     const authUserId = await getAuthUserId(ctx);
     const userId = authUserId ?? null;
 
@@ -31,12 +34,17 @@ export const ping = mutation({
 
     const now = Date.now();
     if (existing) {
-      await ctx.db.patch(existing._id, { lastSeen: now, displayName: player.displayName });
+      await ctx.db.patch(existing._id, {
+        lastSeen: now,
+        displayName: player.displayName,
+        tableId,
+      });
     } else {
       await ctx.db.insert("presence", {
         userId: effectiveUserId,
         displayName: player.displayName,
         lastSeen: now,
+        tableId,
       });
     }
   },

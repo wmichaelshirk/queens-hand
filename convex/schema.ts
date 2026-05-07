@@ -25,7 +25,9 @@ export default defineSchema({
   games: defineTable({
     gameType: v.union(v.literal("slobberhannes"), v.literal("strohmandeln")),
     status: v.union(v.literal("waiting"), v.literal("active"), v.literal("finished")),
-    seatCount: v.number(),
+    seatCount: v.number(),       // max seats
+    minSeatCount: v.number(),    // min seats required to start
+    creatorPlayerId: v.id("players"),
     initialState: v.optional(v.any()),
     settings: v.any(),
     startedAt: v.number(),
@@ -37,6 +39,7 @@ export default defineSchema({
     gameId: v.id("games"),
     seatIndex: v.number(),
     playerId: v.id("players"),
+    ready: v.boolean(),
   })
     .index("by_game", ["gameId"])
     .index("by_player", ["playerId"]),
@@ -83,9 +86,11 @@ export default defineSchema({
     userId: v.string(),
     displayName: v.string(),
     lastSeen: v.number(),
+    tableId: v.optional(v.id("games")),
   })
     .index("by_user", ["userId"])
-    .index("by_last_seen", ["lastSeen"]),
+    .index("by_last_seen", ["lastSeen"])
+    .index("by_table", ["tableId"]),
 
   // ── Lobby chat (ephemeral window, capped at 100 messages) ─────────────
 
