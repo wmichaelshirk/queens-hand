@@ -33,18 +33,19 @@ export const ping = mutation({
       .first();
 
     const now = Date.now();
+    const tableIdField = tableId !== undefined ? { tableId } : {};
     if (existing) {
       await ctx.db.patch(existing._id, {
         lastSeen: now,
         displayName: player.displayName,
-        tableId,
+        ...tableIdField,
       });
     } else {
       await ctx.db.insert("presence", {
         userId: effectiveUserId,
         displayName: player.displayName,
         lastSeen: now,
-        tableId,
+        ...tableIdField,
       });
     }
   },

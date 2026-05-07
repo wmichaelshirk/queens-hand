@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query, internalMutation } from "./_generated/server";
+import { mutation, query, internalMutation, MutationCtx } from "./_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 
 const GAME_CONFIG = {
@@ -9,10 +9,7 @@ const GAME_CONFIG = {
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 
-async function resolvePlayer(
-  ctx: Parameters<Parameters<typeof mutation>[0]["handler"]>[0],
-  guestUserId: string | undefined,
-) {
+async function resolvePlayer(ctx: MutationCtx, guestUserId: string | undefined) {
   const authUserId = await getAuthUserId(ctx);
   const userId = authUserId ?? (guestUserId?.startsWith("guest_") ? guestUserId : null);
   if (!userId) throw new Error("Not authenticated");
