@@ -39,7 +39,7 @@ export default defineSchema({
     gameId: v.id("games"),
     seatIndex: v.number(),
     playerId: v.id("players"),
-    ready: v.boolean(),
+    ready: v.optional(v.boolean()),
   })
     .index("by_game", ["gameId"])
     .index("by_player", ["playerId"]),
