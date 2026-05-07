@@ -6,6 +6,7 @@
     isLoggedIn, guestSession, signOut,
     convex, watchQuery,
   } from "$lib/convex";
+  import { GAME_OPTIONS } from "$lib/gameConfig";
 
   const gameId = $derived($page.params.gameId);
 
@@ -57,6 +58,7 @@
     displayName: string;
     isBot: boolean;
     ready: boolean;
+    connected: boolean;
   };
 
   type Watcher = { userId: string; displayName: string };
@@ -77,13 +79,6 @@
   const GAME_NAMES: Record<string, string> = {
     slobberhannes: "Slobberhannes",
     strohmandeln: "Strohmandeln",
-  };
-
-  const GAME_OPTIONS: Record<string, { key: string; label: string; type: "number"; default: number; min: number; max: number }[]> = {
-    slobberhannes: [
-      { key: "loseAt", label: "Lose at score", type: "number", default: 10, min: 5, max: 30 },
-    ],
-    strohmandeln: [],
   };
 
   const tableData = watchQuery<TableData | null>("games:getTable" as any, { gameId });
@@ -109,11 +104,6 @@
       localSettings = { ...$tableData.settings };
     }
   });
-
-  function getOption(key: string, def: number): number {
-    const v = localSettings[key];
-    return typeof v === "number" ? v : def;
-  }
 
   async function saveSettings() {
     await convex.mutation("games:updateSettings" as any, {
@@ -155,15 +145,19 @@
   }
 
   async function leaveTable() {
+    if (isSeated) {
+      // Remain seated — just navigate away. Will appear disconnected in sidebar.
+      goto("/");
+      return;
+    }
+    // Non-seated watcher explicitly leaving — may trigger table deletion.
     if (busy) return;
     busy = true;
     try {
-      if (isSeated) {
-        await convex.mutation("games:standUp" as any, {
-          gameId,
-          guestUserId: $guestSession?.userId,
-        });
-      }
+      await convex.mutation("games:leaveTable" as any, {
+        gameId,
+        guestUserId: $guestSession?.userId,
+      });
     } finally {
       busy = false;
     }
@@ -302,42 +296,38 @@
             </div>
           {/if}
 
-          <!-- Creator settings -->
-          {#if isCreator && $tableData.status === "waiting"}
+          <!-- Settings panel (only shown when game has options) -->
+          {#if $tableData.status === "waiting"}
             {@const options = GAME_OPTIONS[$tableData.gameType] ?? []}
             {#if options.length > 0}
-              <div class="settings-panel">
-                <div class="settings-title">Table settings <span class="creator-badge">creator</span></div>
-                {#each options as opt}
-                  <label class="setting-row">
-                    <span class="setting-label">{opt.label}</span>
-                    <input
-                      type="number"
-                      class="input number-input"
-                      min={opt.min}
-                      max={opt.max}
-                      value={getOption(opt.key, opt.default)}
-                      oninput={(e) => {
-                        localSettings = { ...localSettings, [opt.key]: Number((e.target as HTMLInputElement).value) };
-                        saveSettings();
-                      }}
-                    />
-                  </label>
-                {/each}
-              </div>
-            {/if}
-          {/if}
-
-          <!-- Non-creator: show current settings read-only -->
-          {#if !isCreator && $tableData.status === "waiting"}
-            {@const options = GAME_OPTIONS[$tableData.gameType] ?? []}
-            {#if options.length > 0}
-              <div class="settings-panel readonly">
-                <div class="settings-title">Table settings</div>
+              <div class="settings-panel" class:readonly={!isCreator}>
+                <div class="settings-title">
+                  Table settings
+                  {#if isCreator}<span class="creator-badge">creator</span>{/if}
+                </div>
                 {#each options as opt}
                   <div class="setting-row">
                     <span class="setting-label">{opt.label}</span>
-                    <span class="setting-value">{getOption(opt.key, opt.default)}</span>
+                    {#if isCreator}
+                      {#if opt.type === 'select'}
+                        <select
+                          class="input select-input"
+                          value={String(localSettings[opt.key] ?? opt.default)}
+                          onchange={(e) => {
+                            localSettings = { ...localSettings, [opt.key]: (e.target as HTMLSelectElement).value };
+                            saveSettings();
+                          }}
+                        >
+                          {#each opt.choices as choice}
+                            <option value={choice.value}>{choice.label}</option>
+                          {/each}
+                        </select>
+                      {/if}
+                    {:else}
+                      <span class="setting-value">
+                        {opt.choices.find(c => c.value === String(localSettings[opt.key] ?? opt.default))?.label ?? opt.default}
+                      </span>
+                    {/if}
                   </div>
                 {/each}
               </div>
@@ -370,13 +360,14 @@
           <ul class="player-list">
             {#each Array($tableData.seatCount) as _, i}
               {@const seat = $tableData.seats.find((s) => s.seatIndex === i)}
-              <li class="player-row" class:mine={seat?.playerId === myId} class:empty={!seat}>
+              <li class="player-row" class:mine={seat?.playerId === myId} class:empty={!seat} class:away={seat && !seat.connected}>
                 <span class="seat-num">{i + 1}</span>
                 {#if seat}
                   <span class="player-label">
                     {seat.displayName}{seat.isBot ? " 🤖" : ""}
                     {#if seat.playerId === myId}<span class="you">(you)</span>{/if}
                     {#if seat.playerId === $tableData.creatorPlayerId}<span class="creator-dot" title="creator">★</span>{/if}
+                    {#if !seat.connected}<span class="away-label">away</span>{/if}
                   </span>
                   {#if seat.ready}<span class="ready-dot">✓</span>{/if}
                 {:else}
@@ -645,10 +636,20 @@
     color: #888;
   }
 
-  .number-input {
-    width: 70px;
-    text-align: center;
+  .select-input {
+    min-width: 100px;
   }
+
+  .away-label {
+    font-size: 0.65rem;
+    color: #555;
+    background: #1a2030;
+    border-radius: 3px;
+    padding: 0.1rem 0.3rem;
+    margin-left: 0.25rem;
+  }
+
+  .player-row.away .player-label { opacity: 0.6; }
 
   .game-placeholder {
     display: flex;

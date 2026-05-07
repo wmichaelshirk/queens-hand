@@ -79,28 +79,38 @@ export const getTable = query({
       .withIndex("by_game", (q) => q.eq("gameId", gameId))
       .collect();
 
+    const now = Date.now();
     const seats = await Promise.all(
       rawSeats.map(async (seat) => {
         const player = await ctx.db.get(seat.playerId);
+        const presence = player
+          ? await ctx.db
+              .query("presence")
+              .withIndex("by_user", (q) => q.eq("userId", player.userId))
+              .unique()
+          : null;
+        const connected =
+          !!presence &&
+          presence.tableId === gameId &&
+          now - presence.lastSeen < 90_000;
         return {
           seatIndex: seat.seatIndex,
           playerId: seat.playerId as string,
           displayName: player?.displayName ?? "Unknown",
           isBot: player?.isBot ?? false,
           ready: seat.ready ?? false,
+          connected,
         };
       })
     );
 
     // Watchers: presence rows pointing at this table, not in a seat.
-    // Presence uses userId strings; seats use player _id. Resolve seated userIds first.
     const seatedUserIds = new Set(
       await Promise.all(rawSeats.map(async (s) => {
         const p = await ctx.db.get(s.playerId);
         return p?.userId ?? "";
       }))
     );
-    const now = Date.now();
     const presenceRows = await ctx.db
       .query("presence")
       .withIndex("by_table", (q) => q.eq("tableId", gameId))
@@ -198,7 +208,7 @@ export const standUp = mutation({
   handler: async (ctx, { gameId, guestUserId }) => {
     const player = await resolvePlayer(ctx, guestUserId);
     const game = await ctx.db.get(gameId);
-    if (!game) throw new Error("Table not found");
+    if (!game) return;
     if (game.status === "active") throw new Error("Cannot leave a seat during an active game");
 
     const allSeats = await ctx.db
@@ -207,27 +217,55 @@ export const standUp = mutation({
       .collect();
 
     const mySeat = allSeats.find((s) => s.playerId === player._id);
-    if (!mySeat) return; // not seated, nothing to do
+    if (!mySeat) return;
 
     await ctx.db.delete(mySeat._id);
 
     const remainingSeats = allSeats.filter((s) => s._id !== mySeat._id);
+    if (remainingSeats.length > 0 && game.creatorPlayerId === player._id) {
+      const next = remainingSeats.sort((a, b) => a.seatIndex - b.seatIndex)[0]!;
+      await ctx.db.patch(gameId, { creatorPlayerId: next.playerId });
+    }
+    // Table is NOT deleted here — the player is still on the page as a watcher.
+    // Deletion happens in leaveTable when a non-seated watcher explicitly leaves.
+  },
+});
+
+// Called when a non-seated watcher navigates back to the lobby.
+// Stands up first if somehow still seated (safety), then deletes the table
+// if no seated players remain.
+export const leaveTable = mutation({
+  args: {
+    gameId: v.id("games"),
+    guestUserId: v.optional(v.string()),
+  },
+  handler: async (ctx, { gameId, guestUserId }) => {
+    const player = await resolvePlayer(ctx, guestUserId);
+    const game = await ctx.db.get(gameId);
+    if (!game) return;
+
+    // Stand up if seated (safety; normally caller is already not seated)
+    if (game.status !== "active") {
+      const mySeat = await ctx.db
+        .query("game_seats")
+        .withIndex("by_game", (q) => q.eq("gameId", gameId))
+        .filter((q) => q.eq(q.field("playerId"), player._id))
+        .unique();
+      if (mySeat) await ctx.db.delete(mySeat._id);
+    }
+
+    const remainingSeats = await ctx.db
+      .query("game_seats")
+      .withIndex("by_game", (q) => q.eq("gameId", gameId))
+      .collect();
 
     if (remainingSeats.length === 0) {
-      // Last person out — delete the table and its messages
       const messages = await ctx.db
         .query("table_messages")
         .withIndex("by_game_ts", (q) => q.eq("gameId", gameId))
         .collect();
       for (const msg of messages) await ctx.db.delete(msg._id);
       await ctx.db.delete(gameId);
-      return;
-    }
-
-    // Transfer creator if needed
-    if (game.creatorPlayerId === player._id) {
-      const nextCreator = remainingSeats.sort((a, b) => a.seatIndex - b.seatIndex)[0]!;
-      await ctx.db.patch(gameId, { creatorPlayerId: nextCreator.playerId });
     }
   },
 });
