@@ -35,6 +35,8 @@ export default defineSchema({
     result: v.optional(v.any()),
     // Used during between_hands phase: votes keyed by enginePlayerIndex (string)
     continuationVotes: v.optional(v.any()),
+    // Score summary for the most recently completed hand (shown in UI)
+    lastHandSummary: v.optional(v.any()),
   }),
 
   game_seats: defineTable({

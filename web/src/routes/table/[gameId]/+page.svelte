@@ -74,6 +74,7 @@
     createdAt: number;
     seats: TableSeat[];
     watchers: Watcher[];
+    result: { losers?: number[]; winners?: number[]; scores?: number[] } | null;
   };
 
   const GAME_NAMES: Record<string, string> = {
@@ -145,6 +146,12 @@
     myVote: "continue" | "quit" | null;
   };
 
+  type HandSummary = {
+    deltas: { player: number; delta: number; reason: string }[];
+    runningTotals: number[];
+    seatNames: string[];
+  };
+
   type GameState = {
     publicState: GamePublicState;
     myHand: Card[];
@@ -153,6 +160,7 @@
     gameType: string;
     strawmen: StrawmanPileInfo[][] | null;  // [enginePlayerIndex][pileIndex], Strohmandeln only
     continuation: ContinuationState | null;
+    lastHandSummary: HandSummary | null;
   } | null;
 
   const gameState = watchQuery<GameState>(
@@ -167,6 +175,17 @@
   const isMyTurn = $derived(
     myEngineIndex >= 0 && $gameState?.publicState.currentTurn === myEngineIndex
   );
+
+  // Separate card-play moves (handled by clicking hand) from bid/announce moves
+  const nonCardMoves = $derived(
+    ($gameState?.legalMoves ?? []).filter((m) => m.type !== "PLAY_CARD")
+  );
+
+  let showHandSummary = $state(true);
+  $effect(() => {
+    // Auto-show summary whenever it updates
+    if ($gameState?.lastHandSummary) showHandSummary = true;
+  });
 
   function moveLabel(move: Move): string {
     if (move.type === "PLAY_CARD") return `${move.card.rank}${move.card.suit}`;
@@ -363,6 +382,9 @@
     <div class="header-left">
       <button class="back-btn" onclick={leaveTable}>← Lobby</button>
       {#if $tableData}
+        <span class="game-icon" aria-hidden="true">
+          {#if $tableData.gameType === "slobberhannes"}Q♣{:else}★{/if}
+        </span>
         <span class="table-title">{GAME_NAMES[$tableData.gameType]}</span>
         <span class="status-badge" class:live={$tableData.status === "active"}>
           {$tableData.status === "active" ? "live" : $tableData.status === "finished" ? "finished" : "waiting"}
@@ -387,7 +409,12 @@
 
       {:else if $tableData.status === "waiting"}
         <div class="waiting-room">
-          <h2 class="waiting-title">{GAME_NAMES[$tableData.gameType]}</h2>
+          <h2 class="waiting-title">
+            <span class="waiting-game-icon" aria-hidden="true">
+              {#if $tableData.gameType === "slobberhannes"}Q♣{:else}★{/if}
+            </span>
+            {GAME_NAMES[$tableData.gameType]}
+          </h2>
 
           <p class="waiting-sub">
             {$tableData.seats.length} of {$tableData.seatCount} seated
@@ -483,19 +510,56 @@
             {/if}
           {/if}
 
+          <!-- Rules accordion -->
+          {#if $tableData}
+            <details class="rules-accordion">
+              <summary class="rules-summary">
+                How to play {GAME_NAMES[$tableData.gameType]}
+              </summary>
+              {#if $tableData.gameType === "slobberhannes"}
+                <div class="rules-body">
+                  <p><strong>Players:</strong> 3–6 · <strong>Deck:</strong> 32 cards (7 through Ace, four suits)</p>
+                  <p><strong>Goal:</strong> Avoid penalty points. The first player to reach 10 total points loses.</p>
+                  <p><strong>Score 1 penalty point for taking:</strong></p>
+                  <ul>
+                    <li>The <em>first trick</em> of the hand</li>
+                    <li>The <em>last trick</em> of the hand</li>
+                    <li>The <em>Queen of Clubs</em> (the "Slobberhannes")</li>
+                  </ul>
+                  <p><strong>The sweep:</strong> If you take all three in one hand, you score 4 points instead of 3.</p>
+                  <p><strong>Play:</strong> Must follow the led suit. If you can't, play any card. No trumps — highest card of the led suit wins.</p>
+                </div>
+              {:else}
+                <div class="rules-body">
+                  <p><strong>Players:</strong> 2 · <strong>Deck:</strong> 54-card Tarock deck (22 Tarocks + 32 suit cards)</p>
+                  <p><strong>Tarocks</strong> (I–XXI plus the Fool ★) are permanent trumps, always beating suit cards.</p>
+                  <p><strong>Strawman piles:</strong> Each player has 3 face-down piles of 4 cards. One card per pile is turned up at the start of each trick. Kings and Knights go into your hand; others stay as piles.</p>
+                  <p><strong>Bidding:</strong> Forehand may bid "play" (become the Declarer) or pass. If both pass, no Declarer — whoever captures more card points wins.</p>
+                  <p><strong>Winning a hand:</strong> The Declarer needs ≥ 36 card points (out of 70). Face cards and high Tarocks are worth points; plain cards are worth less.</p>
+                  <p><strong>A draw</strong> (35–35 when no Declarer) doubles the score multiplier for the next hand instead of transferring points.</p>
+                  <p><strong>Session:</strong> After each hand, vote to Continue or Quit. No fixed end — play as long as you like.</p>
+                </div>
+              {/if}
+            </details>
+          {/if}
+
         </div>
 
       {:else if $tableData.status === "active" || $tableData.status === "between_hands"}
         <div class="game-active">
           {#if $gameState}
+            <!-- Turn banner -->
             <div class="turn-banner" class:my-turn={isMyTurn}>
               {#if $gameState.continuation}
                 Hand complete
+              {:else if isMyTurn}
+                Your turn
               {:else}
-                {isMyTurn ? "Your turn" : `Waiting for ${seatName($gameState.publicState.currentTurn)}…`}
+                Waiting for {seatName($gameState.publicState.currentTurn)}…
               {/if}
             </div>
 
+            <!-- Scores row -->
             <div class="scores-row">
               {#each $gameState.seats as seat (seat.seatIndex)}
                 <div class="score-chip" class:active-turn={seat.enginePlayerIndex === $gameState.publicState.currentTurn}>
@@ -504,6 +568,33 @@
                 </div>
               {/each}
             </div>
+
+            <!-- Last hand summary (both games) -->
+            {#if $gameState.lastHandSummary && showHandSummary}
+              {@const hs = $gameState.lastHandSummary}
+              <div class="hand-summary">
+                <div class="summary-header">
+                  <span class="summary-title">Last hand</span>
+                  <button class="summary-dismiss" onclick={() => showHandSummary = false}>✕</button>
+                </div>
+                <div class="summary-rows">
+                  {#each hs.deltas as d (d.player)}
+                    {@const isBad = $gameState?.gameType === 'slobberhannes' ? d.delta > 0 : d.delta < 0}
+                    {@const isGood = $gameState?.gameType === 'slobberhannes' ? d.delta < 0 : d.delta > 0}
+                    <div class="summary-row" class:summary-penalty={isBad} class:summary-bonus={isGood}>
+                      <span class="summary-name">{hs.seatNames[d.player] ?? `Player ${d.player + 1}`}</span>
+                      <span class="summary-reason">{d.reason}</span>
+                      <span class="summary-delta">{d.delta > 0 ? '+' : ''}{d.delta}</span>
+                    </div>
+                  {/each}
+                </div>
+                <div class="summary-totals">
+                  {#each hs.runningTotals as total, i (i)}
+                    <span class="summary-total">{hs.seatNames[i] ?? `P${i + 1}`}: {total}</span>
+                  {/each}
+                </div>
+              </div>
+            {/if}
 
             <!-- Between-hands vote (Strohmandeln only) -->
             {#if $gameState.continuation}
@@ -536,6 +627,30 @@
               </div>
             {/if}
 
+            <!-- Opponents (face-down cards) -->
+            {#if !$gameState.continuation}
+              {@const opponents = $gameState.seats.filter(s => s.playerId !== myId)}
+              {#if opponents.length > 0}
+                <div class="opponents-row">
+                  {#each opponents as seat (seat.seatIndex)}
+                    <div class="opponent-area">
+                      <span class="opponent-name">{seat.displayName}{seat.isBot ? " 🤖" : ""}</span>
+                      <div class="face-down-stack">
+                        {#each Array(Math.min(seat.handSize, 10)) as _, ci (ci)}
+                          <div class="playing-card face-down" style="--ci: {ci}"></div>
+                        {/each}
+                        {#if seat.handSize === 0}
+                          <span class="no-cards-label">no cards</span>
+                        {:else if seat.handSize > 10}
+                          <span class="stack-overflow">+{seat.handSize - 10}</span>
+                        {/if}
+                      </div>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            {/if}
+
             <!-- Opponent strawman piles (Strohmandeln only) -->
             {#if $gameState.strawmen && !$gameState.continuation}
               {@const opponentIndex = myEngineIndex === 0 ? 1 : 0}
@@ -547,9 +662,16 @@
                   {#each opponentPiles as pile, i (i)}
                     <div class="straw-pile" class:empty={!pile.topCard}>
                       {#if pile.topCard}
-                        <div class="straw-top-card" class:red={isRedSuit(pile.topCard.suit)} class:tarock={pile.topCard.suit === 'T'}>
-                          <span class="card-rank">{pile.topCard.rank}</span>
-                          <span class="card-suit">{pile.topCard.suit === 'T' ? '' : pile.topCard.suit}</span>
+                        <div class="playing-card straw-card" class:card-red={isRedSuit(pile.topCard.suit)} class:card-tarock={pile.topCard.suit === 'T'}>
+                          <span class="card-top-left">
+                            <span class="cr-rank">{pile.topCard.rank}</span>
+                            <span class="cr-suit">{pile.topCard.suit === 'T' ? '★' : pile.topCard.suit}</span>
+                          </span>
+                          <span class="card-center">{pile.topCard.suit === 'T' ? pile.topCard.rank : pile.topCard.suit}</span>
+                          <span class="card-bottom-right">
+                            <span class="cr-rank">{pile.topCard.rank}</span>
+                            <span class="cr-suit">{pile.topCard.suit === 'T' ? '★' : pile.topCard.suit}</span>
+                          </span>
                         </div>
                         {#if pile.depth > 0}
                           <div class="straw-depth">+{pile.depth}</div>
@@ -563,25 +685,34 @@
               </div>
             {/if}
 
-            <!-- Current trick (hidden during between-hands voting) -->
+            <!-- Current trick -->
             {#if !$gameState.continuation}
-            <div class="trick-area">
-              <div class="trick-label">Trick {$gameState.publicState.trickNum + 1}</div>
-              {#if $gameState.publicState.currentTrick.length > 0}
-                <div class="trick-cards">
-                  {#each $gameState.publicState.currentTrick as play}
-                    <div class="played-card" class:red={isRedSuit(play.card.suit)} class:tarock={play.card.suit === 'T'}>
-                      <span class="card-rank">{play.card.rank}</span>
-                      <span class="card-suit">{play.card.suit === 'T' ? '' : play.card.suit}</span>
-                      <span class="card-player">{seatName(play.playerIndex)}</span>
-                    </div>
-                  {/each}
-                </div>
-              {:else}
-                <div class="trick-empty">—</div>
-              {/if}
-            </div>
-            {/if}<!-- /!continuation -->
+              <div class="trick-area">
+                <div class="trick-label">Trick {$gameState.publicState.trickNum + 1}</div>
+                {#if $gameState.publicState.currentTrick.length > 0}
+                  <div class="trick-cards">
+                    {#each $gameState.publicState.currentTrick as play}
+                      <div class="trick-card-wrap">
+                        <div class="playing-card trick-card" class:card-red={isRedSuit(play.card.suit)} class:card-tarock={play.card.suit === 'T'}>
+                          <span class="card-top-left">
+                            <span class="cr-rank">{play.card.rank}</span>
+                            <span class="cr-suit">{play.card.suit === 'T' ? '★' : play.card.suit}</span>
+                          </span>
+                          <span class="card-center">{play.card.suit === 'T' ? play.card.rank : play.card.suit}</span>
+                          <span class="card-bottom-right">
+                            <span class="cr-rank">{play.card.rank}</span>
+                            <span class="cr-suit">{play.card.suit === 'T' ? '★' : play.card.suit}</span>
+                          </span>
+                        </div>
+                        <span class="trick-player-name">{seatName(play.playerIndex)}</span>
+                      </div>
+                    {/each}
+                  </div>
+                {:else}
+                  <div class="trick-empty">—</div>
+                {/if}
+              </div>
+            {/if}
 
             <!-- My strawman piles (Strohmandeln only) -->
             {#if $gameState.strawmen && !$gameState.continuation}
@@ -592,9 +723,16 @@
                   {#each myPiles as pile, i (i)}
                     <div class="straw-pile" class:empty={!pile.topCard}>
                       {#if pile.topCard}
-                        <div class="straw-top-card" class:red={isRedSuit(pile.topCard.suit)} class:tarock={pile.topCard.suit === 'T'}>
-                          <span class="card-rank">{pile.topCard.rank}</span>
-                          <span class="card-suit">{pile.topCard.suit === 'T' ? '' : pile.topCard.suit}</span>
+                        <div class="playing-card straw-card" class:card-red={isRedSuit(pile.topCard.suit)} class:card-tarock={pile.topCard.suit === 'T'}>
+                          <span class="card-top-left">
+                            <span class="cr-rank">{pile.topCard.rank}</span>
+                            <span class="cr-suit">{pile.topCard.suit === 'T' ? '★' : pile.topCard.suit}</span>
+                          </span>
+                          <span class="card-center">{pile.topCard.suit === 'T' ? pile.topCard.rank : pile.topCard.suit}</span>
+                          <span class="card-bottom-right">
+                            <span class="cr-rank">{pile.topCard.rank}</span>
+                            <span class="cr-suit">{pile.topCard.suit === 'T' ? '★' : pile.topCard.suit}</span>
+                          </span>
                         </div>
                         {#if pile.depth > 0}
                           <div class="straw-depth">+{pile.depth}</div>
@@ -608,63 +746,92 @@
               </div>
             {/if}
 
-            <!-- Available moves -->
-            {#if isMyTurn && $gameState.legalMoves.length > 0}
+            <!-- Non-card moves (bids, announcements) -->
+            {#if isMyTurn && nonCardMoves.length > 0}
               <div class="move-section">
-                <div class="move-prompt">Choose your move:</div>
+                <div class="move-prompt">Choose your action:</div>
                 <div class="move-grid">
-                  {#each $gameState.legalMoves as move, i (i)}
-                    <button
-                      class="move-btn"
-                      class:red-card={move.type === 'PLAY_CARD' && isRedSuit(move.card.suit)}
-                      class:tarock-card={move.type === 'PLAY_CARD' && move.card.suit === 'T'}
-                      onclick={() => playMove(move)}
-                      disabled={busy}
-                    >
+                  {#each nonCardMoves as move, i (i)}
+                    <button class="move-btn" onclick={() => playMove(move)} disabled={busy}>
                       {moveLabel(move)}
                     </button>
                   {/each}
                 </div>
               </div>
-            {:else if isMyTurn}
-              <p class="muted centered">Loading moves…</p>
             {/if}
 
-            <!-- Full hand -->
+            <!-- Your hand (click to play) -->
             {#if $gameState.myHand.length > 0}
               <div class="hand-section">
-                <div class="hand-label">Your hand</div>
+                <div class="hand-label">
+                  {isMyTurn ? "Your turn — click a card to play" : "Your hand"}
+                </div>
                 <div class="hand-cards">
                   {#each sortHand($gameState.myHand) as card (`${card.suit}${card.rank}`)}
+                    {@const legal = isMyTurn && isLegalMove(card)}
                     <div
-                      class="hand-card"
-                      class:red={isRedSuit(card.suit)}
-                      class:legal={isMyTurn && isLegalMove(card)}
-                      class:tarock={card.suit === 'T'}
+                      class="playing-card"
+                      class:card-red={isRedSuit(card.suit)}
+                      class:card-tarock={card.suit === 'T'}
+                      class:card-playable={legal}
+                      class:card-dimmed={isMyTurn && !legal}
+                      onclick={() => legal && !busy && playMove({ type: 'PLAY_CARD', card })}
+                      role="button"
+                      tabindex={legal ? 0 : -1}
+                      aria-disabled={!legal || busy}
+                      onkeydown={(e) => e.key === 'Enter' && legal && !busy && playMove({ type: 'PLAY_CARD', card })}
                     >
-                      <span class="card-rank">{card.rank}</span>
-                      <span class="card-suit">{card.suit === 'T' ? '' : card.suit}</span>
+                      <span class="card-top-left">
+                        <span class="cr-rank">{card.rank}</span>
+                        <span class="cr-suit">{card.suit === 'T' ? '★' : card.suit}</span>
+                      </span>
+                      <span class="card-center">{card.suit === 'T' ? card.rank : card.suit}</span>
+                      <span class="card-bottom-right">
+                        <span class="cr-rank">{card.rank}</span>
+                        <span class="cr-suit">{card.suit === 'T' ? '★' : card.suit}</span>
+                      </span>
                     </div>
                   {/each}
                 </div>
               </div>
             {/if}
 
-            <div class="hand-info">
-              {#each $gameState.seats as seat (seat.seatIndex)}
-                {#if seat.playerId !== myId}
-                  <span class="muted">{seat.displayName}: {seat.handSize} cards</span>
-                {/if}
-              {/each}
-            </div>
           {:else}
             <p class="muted centered">Loading game…</p>
           {/if}
         </div>
 
       {:else}
-        <div class="game-placeholder">
-          <p class="muted centered">This game has ended.</p>
+        <!-- Game over screen -->
+        <div class="game-over-screen">
+          <div class="game-over-icon" aria-hidden="true">
+            {#if $tableData?.gameType === "slobberhannes"}Q♣{:else}★{/if}
+          </div>
+          <h2 class="game-over-title">Game Over</h2>
+          {#if $tableData?.result}
+            {@const result = $tableData.result}
+            {#if result.losers && result.losers.length > 0}
+              <p class="game-over-result">
+                Loser{result.losers.length > 1 ? 's' : ''}:
+                {#each result.losers as engineIdx, i}
+                  <strong>{$tableData.seats[engineIdx]?.displayName ?? `Player ${engineIdx + 1}`}</strong>{i < result.losers!.length - 1 ? ', ' : ''}
+                {/each}
+              </p>
+            {/if}
+            {#if result.scores && result.scores.length > 0}
+              <div class="game-over-scores">
+                {#each $tableData.seats as seat, engineIdx (seat.seatIndex)}
+                  {@const score = result.scores[engineIdx] ?? 0}
+                  <div class="game-over-score-row" class:loser-row={result.losers?.includes(engineIdx)}>
+                    <span class="go-name">{seat.displayName}{seat.isBot ? " 🤖" : ""}</span>
+                    <span class="go-score">{score}</span>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          {:else}
+            <p class="muted centered">Game complete.</p>
+          {/if}
           <button class="btn accent-sm" onclick={() => goto("/")}>Back to lobby</button>
         </div>
       {/if}
@@ -786,6 +953,17 @@
   }
   .back-btn:hover { color: #ccc; }
 
+  .game-icon {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #4caf50;
+    background: #0d2a18;
+    border: 1px solid #1a5a30;
+    border-radius: 5px;
+    padding: 0.1rem 0.45rem;
+    letter-spacing: -0.02em;
+  }
+
   .table-title {
     font-size: 1rem;
     font-weight: 700;
@@ -840,7 +1018,66 @@
     font-weight: 700;
     color: #e94560;
     margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
   }
+
+  .waiting-game-icon {
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: #4caf50;
+    background: #0d2a18;
+    border: 1px solid #1a5a30;
+    border-radius: 5px;
+    padding: 0.1rem 0.5rem;
+  }
+
+  /* ── Rules accordion ─────────────────────────────────────────────────────── */
+  .rules-accordion {
+    width: 100%;
+    background: #0d1e38;
+    border: 1px solid #1a3a60;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .rules-summary {
+    cursor: pointer;
+    padding: 0.75rem 1rem;
+    font-size: 0.82rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: #888;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    user-select: none;
+  }
+  .rules-summary::-webkit-details-marker { display: none; }
+  .rules-summary::before {
+    content: '▶';
+    font-size: 0.65rem;
+    transition: transform 0.2s;
+    color: #555;
+  }
+  details[open] .rules-summary::before { transform: rotate(90deg); }
+  .rules-summary:hover { color: #bbb; }
+
+  .rules-body {
+    padding: 0.75rem 1.1rem 1rem;
+    font-size: 0.85rem;
+    color: #aaa;
+    line-height: 1.7;
+    border-top: 1px solid #1a3a60;
+  }
+
+  .rules-body p  { margin: 0 0 0.5rem; }
+  .rules-body ul { margin: 0.25rem 0 0.5rem 1.25rem; padding: 0; }
+  .rules-body li { margin-bottom: 0.2rem; }
+  .rules-body strong { color: #ccc; }
+  .rules-body em { color: #e0c060; font-style: normal; }
 
   .waiting-sub {
     color: #888;
@@ -972,12 +1209,65 @@
 
   .player-row.away .player-label { opacity: 0.6; }
 
-  .game-placeholder {
+  /* ── Game over screen ────────────────────────────────────────────────────── */
+  .game-over-screen {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 1rem;
+    gap: 1.25rem;
+    padding: 2rem;
+    max-width: 420px;
+    width: 100%;
   }
+
+  .game-over-icon {
+    font-size: 2rem;
+    font-weight: 700;
+    color: #4caf50;
+    background: #0d2a18;
+    border: 2px solid #1a5a30;
+    border-radius: 10px;
+    padding: 0.3rem 0.9rem;
+  }
+
+  .game-over-title {
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: #e0e0e0;
+    margin: 0;
+  }
+
+  .game-over-result {
+    font-size: 1rem;
+    color: #ccc;
+    margin: 0;
+    text-align: center;
+  }
+  .game-over-result strong { color: #e94560; }
+
+  .game-over-scores {
+    width: 100%;
+    background: #0d1e38;
+    border: 1px solid #1a3a60;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .game-over-score-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.6rem 1rem;
+    border-bottom: 1px solid #1a2a40;
+    font-size: 0.9rem;
+  }
+  .game-over-score-row:last-child { border-bottom: none; }
+  .game-over-score-row.loser-row  { background: #1e0a10; }
+
+  .go-name  { color: #ccc; font-weight: 600; }
+  .go-score { color: #e0e0e0; font-weight: 700; font-size: 1.1rem; }
+  .loser-row .go-name  { color: #e94560; }
+  .loser-row .go-score { color: #e94560; }
 
   /* ── Active game board ────────────────────────────────────────────────────── */
   .game-active {
@@ -1038,6 +1328,100 @@
     color: #e0e0e0;
   }
 
+  /* ── Playing cards ───────────────────────────────────────────────────────── */
+  .playing-card {
+    position: relative;
+    display: inline-flex;
+    flex-direction: column;
+    justify-content: space-between;
+    width: 54px;
+    height: 80px;
+    background: #f8f5ee;
+    border: 1px solid #bbb;
+    border-radius: 7px;
+    padding: 3px 4px;
+    font-family: system-ui, sans-serif;
+    color: #1a1a2e;
+    user-select: none;
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
+    flex-shrink: 0;
+  }
+
+  .playing-card.card-red    { color: #c0392b; }
+  .playing-card.card-tarock { color: #6c3fbd; }
+
+  .playing-card.card-playable {
+    cursor: pointer;
+    transform: translateY(-8px);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+    border-color: #f1c40f;
+    border-width: 2px;
+  }
+  .playing-card.card-playable:hover {
+    transform: translateY(-12px);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.55);
+  }
+  .playing-card.card-dimmed {
+    opacity: 0.32;
+    filter: grayscale(20%);
+  }
+
+  .playing-card.face-down {
+    background: #1a3464;
+    border-color: #0f244a;
+    cursor: default;
+    position: relative;
+    overflow: hidden;
+  }
+  .playing-card.face-down::after {
+    content: '';
+    position: absolute;
+    inset: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 4px;
+    background: repeating-linear-gradient(
+      45deg,
+      rgba(255, 255, 255, 0.04),
+      rgba(255, 255, 255, 0.04) 2px,
+      transparent 2px,
+      transparent 8px
+    );
+  }
+
+  .playing-card.trick-card  { width: 54px; height: 80px; }
+  .playing-card.straw-card  { width: 52px; height: 76px; }
+
+  .card-top-left {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    line-height: 1;
+    gap: 0px;
+  }
+  .card-bottom-right {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    line-height: 1;
+    transform: rotate(180deg);
+    gap: 0px;
+    align-self: flex-end;
+  }
+  .cr-rank { font-size: 0.72rem; font-weight: 800; line-height: 1.1; }
+  .cr-suit { font-size: 0.58rem; line-height: 1; }
+
+  .card-center {
+    text-align: center;
+    font-size: 1.35rem;
+    line-height: 1;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+  }
+
+  /* ── Trick area ──────────────────────────────────────────────────────────── */
   .trick-area {
     display: flex;
     flex-direction: column;
@@ -1054,30 +1438,74 @@
 
   .trick-cards {
     display: flex;
-    gap: 0.75rem;
+    gap: 1rem;
     flex-wrap: wrap;
     justify-content: center;
+    align-items: flex-end;
   }
 
-  .played-card {
+  .trick-card-wrap {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 0.1rem;
-    background: #1a2a40;
-    border: 1px solid #1a4a80;
-    border-radius: 8px;
-    padding: 0.5rem 0.7rem;
-    min-width: 52px;
+    gap: 0.3rem;
   }
-  .played-card.red { color: #e94560; border-color: #804060; }
+  .trick-player-name {
+    font-size: 0.65rem;
+    color: #666;
+  }
 
-  .card-rank { font-size: 1.1rem; font-weight: 700; }
-  .card-suit { font-size: 1.1rem; }
-  .card-player { font-size: 0.65rem; color: #555; margin-top: 0.2rem; }
-
-  .played-card.tarock { color: #b070e0; border-color: #4a2a60; }
   .trick-empty { font-size: 1.2rem; color: #333; }
+
+  /* ── Opponents row ───────────────────────────────────────────────────────── */
+  .opponents-row {
+    display: flex;
+    gap: 2rem;
+    justify-content: center;
+    flex-wrap: wrap;
+    padding: 0.25rem 0 0.5rem;
+  }
+
+  .opponent-area {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .opponent-name {
+    font-size: 0.72rem;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .face-down-stack {
+    display: flex;
+    align-items: flex-end;
+    position: relative;
+  }
+
+  .face-down-stack .playing-card.face-down {
+    margin-left: -28px;
+    transition: none;
+  }
+  .face-down-stack .playing-card.face-down:first-child {
+    margin-left: 0;
+  }
+
+  .no-cards-label {
+    font-size: 0.75rem;
+    color: #444;
+    font-style: italic;
+  }
+
+  .stack-overflow {
+    font-size: 0.72rem;
+    color: #666;
+    margin-left: 4px;
+    align-self: center;
+  }
 
   /* ── Strawman piles (Strohmandeln) ───────────────────────────────────────── */
   .strawmen-row {
@@ -1106,24 +1534,7 @@
     flex-direction: column;
     align-items: center;
     gap: 0.25rem;
-    min-width: 52px;
   }
-
-  .straw-top-card {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.1rem;
-    background: #1a2a40;
-    border: 1px solid #1a4a80;
-    border-radius: 8px;
-    padding: 0.5rem 0.7rem;
-    min-width: 52px;
-    text-align: center;
-  }
-
-  .straw-top-card.red   { color: #e94560; border-color: #804060; }
-  .straw-top-card.tarock { color: #b070e0; border-color: #4a2a60; }
 
   .straw-depth {
     font-size: 0.68rem;
@@ -1139,14 +1550,10 @@
     color: #2a3a50;
     background: #0d1528;
     border: 1px dashed #1a2a40;
-    border-radius: 8px;
-    padding: 0.5rem 0.7rem;
-    min-width: 52px;
-    min-height: 48px;
+    border-radius: 7px;
+    width: 52px;
+    height: 76px;
   }
-
-  .move-btn.tarock-card { color: #b070e0; border-color: #4a2a60; }
-  .move-btn.tarock-card:hover:not(:disabled) { background: #1a0a30; border-color: #e94560; }
 
   /* ── Between-hands vote (Strohmandeln) ───────────────────────────────────── */
   .vote-section {
@@ -1252,65 +1659,101 @@
   }
   .move-btn:hover:not(:disabled) { background: #1a5a90; border-color: #e94560; }
   .move-btn:disabled { opacity: 0.45; cursor: default; }
-  .move-btn.red-card { color: #e94560; border-color: #804060; }
-  .move-btn.red-card:hover:not(:disabled) { background: #2a1020; border-color: #e94560; }
 
-  /* ── Full hand display ───────────────────────────────────────────────────── */
+  /* ── Hand section ────────────────────────────────────────────────────────── */
   .hand-section {
     display: flex;
     flex-direction: column;
-    gap: 0.6rem;
+    gap: 0.75rem;
     align-items: center;
     border-top: 1px solid #0f3460;
-    padding-top: 1.25rem;
+    padding-top: 1.5rem;
   }
 
   .hand-label {
-    font-size: 0.7rem;
+    font-size: 0.72rem;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: #555;
+    color: #666;
   }
 
   .hand-cards {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.4rem;
+    gap: 0.35rem;
     justify-content: center;
+    padding-bottom: 10px; /* room for playable lift */
   }
 
-  .hand-card {
+  /* ── Hand summary ────────────────────────────────────────────────────────── */
+  .hand-summary {
+    background: #0d1e38;
+    border: 1px solid #1a4a80;
+    border-radius: 10px;
+    padding: 0.85rem 1rem;
     display: flex;
     flex-direction: column;
+    gap: 0.6rem;
+    width: 100%;
+    max-width: 480px;
+  }
+
+  .summary-header {
+    display: flex;
     align-items: center;
-    background: #101828;
-    border: 1px solid #1a2a40;
-    border-radius: 6px;
-    padding: 0.35rem 0.55rem;
-    min-width: 40px;
-    opacity: 0.5;
-    font-size: 0.88rem;
+    justify-content: space-between;
   }
 
-  .hand-card.legal {
-    opacity: 1;
-    border-color: #e94560;
+  .summary-title {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #666;
   }
 
-  .hand-card.red { color: #e94560; }
-  .hand-card.tarock { color: #b070e0; border-color: #4a2a60; }
-  .hand-card.tarock.legal { border-color: #e94560; }
+  .summary-dismiss {
+    background: none;
+    border: none;
+    color: #555;
+    cursor: pointer;
+    font-size: 0.8rem;
+    padding: 0;
+    line-height: 1;
+  }
+  .summary-dismiss:hover { color: #999; }
 
-  .hand-card .card-rank { font-weight: 600; line-height: 1.2; }
-  .hand-card .card-suit { font-size: 0.8rem; line-height: 1; }
+  .summary-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
 
-  .hand-info {
+  .summary-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-size: 0.85rem;
+  }
+
+  .summary-name  { font-weight: 600; color: #ccc; min-width: 80px; }
+  .summary-reason { color: #666; flex: 1; font-style: italic; font-size: 0.8rem; }
+  .summary-delta { font-weight: 700; font-size: 0.9rem; min-width: 32px; text-align: right; }
+
+  .summary-row.summary-penalty .summary-delta { color: #e94560; }
+  .summary-row.summary-bonus   .summary-delta { color: #4caf50; }
+  .summary-row:not(.summary-penalty):not(.summary-bonus) .summary-delta { color: #888; }
+
+  .summary-totals {
     display: flex;
     gap: 1rem;
-    justify-content: center;
     flex-wrap: wrap;
-    font-size: 0.78rem;
+    border-top: 1px solid #1a3060;
+    padding-top: 0.5rem;
+    font-size: 0.8rem;
+    color: #888;
   }
+
+  .summary-total { color: #aaa; }
 
   /* ── Sidebar ─────────────────────────────────────────────────────────────── */
   .sidebar {

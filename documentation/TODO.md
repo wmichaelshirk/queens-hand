@@ -101,61 +101,109 @@ Convex reactive queries push state to clients automatically.
 - [x] Variable player counts per game type (`GAME_CONFIG`; Slobberhannes 3–6, Strohmandeln 2)
 - [x] Creator tracking + transfer on stand-up/leave; game-type options sourced from engine exports
 
-### 1.2 Game initialisation
-- [ ] `convex/games.ts` — `startGame` internal mutation: called when the last
-      seat is filled; deals cards, writes `game_live_state`, `game_public_state`,
-      `player_hands`, sets `games.status = "active"`, stores `initialState`
-- [ ] Auto-trigger: call `startGame` at the end of `joinTable` when
-      `seats.length === game.seatCount`
+### 1.2 Game initialisation ✓
+- [x] `_startGame` internal helper: triggered from `markReady` when all seated
+      players are ready; deals cards, writes `game_live_state`, `game_public_state`,
+      `player_hands`, sets `games.status = "active"`
+- [x] `addBot` mutation: adds an ISMCTS-driven bot player to an empty seat (isBot:
+      true, ready: true); bot is auto-created as a fresh player record per seat
 
-### 1.3 Reactive game state query
-- [ ] `convex/games.ts` — `getMyGameState` query: returns `game_public_state`
-      + caller's own `player_hands` row (never another player's hand)
-- [ ] Web: subscribe to `getMyGameState` in the table page; replace the
-      "game in progress" placeholder with hand + trick + scores
+### 1.3 Reactive game state query ✓
+- [x] `getMyGameState` query: returns `game_public_state` + caller's own
+      `player_hands` row (never another player's hand)
+- [x] Table page subscribes to `getMyGameState`; renders hand, trick, scores,
+      and turn banner
 
-### 1.4 Apply moves
-- [ ] `convex/games.ts` — `applyMove` mutation: authenticate caller → verify
-      it is their turn → read `game_live_state` → call engine → write
-      `game_live_state`, `game_public_state`, each `player_hands` → append
-      `game_moves` → if game over: write result, delete live docs; else if
-      next seat is a bot: schedule `applyBotMoves` action
-- [ ] Web: send `PLAY_CARD` on card click; grey out illegal cards (mirror
-      legal-moves logic client-side as a hint; server still validates)
+### 1.4 Apply moves ✓
+- [x] `applyMove` mutation: validate caller's turn → call engine via `EngineAdapter`
+      → write `game_live_state`, `game_public_state`, each `player_hands` → append
+      `game_moves` → if game over: finalize; else if next seat is a bot: schedule
+      `applyBotMoves`
+- [x] `EngineAdapter` interface unifies Slobberhannes (`Card` bare move) and
+      Strohmandeln (`Move` from types.ts); `_applyMoveLogic` shared across both
+- [x] Web: move buttons rendered for legal cards; cards sent on click
 
-### 1.5 Bot moves
-- [ ] `convex/games.ts` — `applyBotMoves` action: loop — call ISMCTS for
-      each bot seat → call internal mutation to commit move → stop when it
-      is a human player's turn again
+### 1.5 Bot moves ✓
+- [x] `applyBotMoves` internalAction: loops ISMCTS→`applyMoveInternal` while the
+      current seat is a bot; stops when it reaches a human player's turn
+- [x] Strohmandeln between-hands phase: human players vote Continue/Quit after each
+      hand; bots always vote continue; any quit finalises the session
 
 ---
 
 ## Phase 2: Web UI
 
-### 2.1 Web app shell
-- [x] SvelteKit app in `web/` deployed to Vercel
-- [x] Login, lobby, and table shell pages exist
+### 2.1 Web app shell ✓
+- [x] SvelteKit app in `web/` deployed to Vercel; login, lobby, and table pages live
 - [x] Subscribes to reactive Convex queries via `watchQuery` helper
 
-### 2.2 Static game state rendering (blocked on 1.3)
-- [ ] Render own hand face-up, opponents' seat slots face-down
-- [ ] Render current trick in the centre, scores per seat, turn indicator
-- [ ] Cards as SVG or styled elements; suit symbols from engine (♣ ♦ ♥ ♠)
+### 2.2 Static game state rendering ✓
+- [x] Own hand rendered with sorted cards; opponents shown as seat slots
+- [x] Current trick displayed; scores per seat; turn banner; strawman piles (Strohmandeln)
+- [x] Cards styled as proper playing cards (white/cream background, corner rank+suit, color-coded)
+- [x] Opponents' card backs shown as face-down overlapping card stack
 
-### 2.3 Animated event handling
-- [ ] Map each event type to a UI animation or transition:
-      - `CARD_PLAYED` → card slides from player's hand to trick area
-      - `TRICK_WON` → trick slides toward winner's collected pile
-      - `PENALTY_ASSESSED` → score counter increments with highlight
-      - `HAND_OVER` → brief summary overlay before redeal
-      - `GAME_OVER` → result screen
-- [ ] Events carry enough data for the animation; UI does not need to re-query
-      server state after each event
+### 2.3 Event-driven UI
+- [ ] Animate `CARD_PLAYED` → card slides from hand to trick area
+- [ ] Animate `TRICK_WON` → trick slides toward winner
+- [ ] `PENALTY_ASSESSED` / `HAND_OVER` / `GAME_OVER` transitions
+- [ ] (Engine events are already appended to table chat as a text log — this is about visual animation)
 
-### 2.4 Input handling
-- [ ] Click a card → send `PLAY_CARD` to server
-- [ ] Illegal cards are greyed out (client-side hint using legal-moves logic
-      mirrored from engine — server still validates)
+### 2.4 Input handling ✓
+- [x] Click hand card to play (legal cards raised and highlighted; illegal cards dimmed)
+- [x] Bid/announcement actions still use button grid (non-card moves)
+- [x] Illegal cards greyed out client-side (server still validates)
+
+### 2.5 Hand summary ✓
+- [x] Backend: `lastHandSummary` stored on games doc when HAND_SCORED fires; exposed from `getMyGameState`
+- [x] UI: dismissable summary panel shows per-player score deltas + reasons + running totals after each hand
+- [x] Color-coded: penalty (red) vs gain (green), game-type-aware
+- [x] Strohmandeln: shown prominently during between-hands voting phase
+
+### 2.6 Rules reference ✓
+- [x] Collapsible rules accordion on the waiting room page for both games
+- [x] Slobberhannes: penalty scoring rules, sweep bonus, suit-following
+- [x] Strohmandeln: deck, strawman piles, bidding, scoring, session length
+
+### 2.7 Game identity ✓
+- [x] Game icons (Q♣ for Slobberhannes, ★ for Strohmandeln) in table header and waiting room title
+- [x] Icons also shown in lobby table cards and game picker buttons
+
+### 2.8 Game over screen ✓
+- [x] Proper game-over display with final scores and loser highlight
+- [x] `result` exposed from `getTable` query for post-game display
+
+### 2.9 Mid-game quit and kick
+
+#### a) Voluntary quit
+- [ ] `convex/games.ts` — `quitGame` mutation: caller must be a seated human in
+      an active game; marks that player as having forfeited; ends the game
+      immediately (no partial hands); sets `games.status = "finished"` and
+      `games.result` with the quitter flagged as a loss (partners, if any, are
+      not penalised)
+- [ ] After quit: player is stood up (`game_seats` row removed or status = "stood");
+      table returns to waiting/lobby state so remaining players can start a new game
+      without navigating away
+- [ ] Web: "Quit game" button visible only to seated human players during an active
+      game; confirmation prompt before sending (avoid fat-finger forfeits)
+- [ ] Rating update: when Phase 4 is implemented, treat a quit as a last-place finish
+      for the quitter only; other players' results are computed from the score at
+      the moment of quit (TBD — may just void the game for everyone until ratings exist)
+
+#### b) Kick vote
+- [ ] `convex/games.ts` — `voteKick` mutation: any seated human player can cast a
+      kick vote against another seated player; vote is stored on the game or a
+      ephemeral `kick_votes` sub-document; once **all other** seated players have
+      voted to kick a given target, trigger the same quit logic as above (with the
+      target flagged as the forfeiter)
+- [ ] Votes are per-game, per-target, per-voter; a voter can retract before the
+      threshold is reached
+- [ ] Web: UI is TBD — options include (1) a "Vote to kick" button per opponent
+      seat that toggles your vote, with a visible tally; (2) a single "call a vote"
+      action that opens a modal naming the target and requiring explicit confirms
+      from all others. Decide before implementing.
+- [ ] Kick should be unavailable (or auto-succeed) when only 2 players remain at
+      the table (unanimous = 1 vote)
 
 ---
 
@@ -184,7 +232,8 @@ Convex reactive queries push state to clients automatically.
 - [x] Create table: choose game type; scoring-system option for Strohmandeln
       (sourced directly from engine exports — no duplication)
 - [x] Navigate to table as observer (Watch) or return to seated table (Enter)
-- [ ] Bot fill policy (add bots to empty seats before starting)
+- [x] Bot fill policy: `addBot` mutation fills empty seats manually; creator
+      can add bots before clicking ready
 
 ### 3.4 Player identity across tables
 - [x] Identity via Convex Auth (registered) or guest session (`guest_<token>`

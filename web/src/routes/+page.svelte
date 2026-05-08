@@ -208,12 +208,12 @@
             class="pick-btn"
             class:selected={newTableGameType === "slobberhannes"}
             onclick={() => newTableGameType = "slobberhannes"}
-          >Slobberhannes</button>
+          ><span class="pick-icon">Q♣</span> Slobberhannes</button>
           <button
             class="pick-btn"
             class:selected={newTableGameType === "strohmandeln"}
             onclick={() => newTableGameType = "strohmandeln"}
-          >Strohmandeln</button>
+          ><span class="pick-icon">★</span> Strohmandeln</button>
         </div>
         <div class="card-footer">
           <button class="btn accent-sm" onclick={createTable} disabled={creatingTable}>
@@ -229,6 +229,7 @@
           {@const isSeated = table.seats.some((s) => s.playerId === myId)}
           <div class="table-card">
             <div class="card-header">
+              <span class="game-icon-sm">{table.gameType === "slobberhannes" ? "Q♣" : "★"}</span>
               <span class="card-title">{GAME_NAMES[table.gameType]}</span>
               <span class="status" class:live={table.status === "active"}>
                 {table.status === "active" ? "live" : "waiting"}
@@ -447,6 +448,22 @@
     border-style: dashed;
     border-color: #2a4a70;
     background: #141e33;
+  }
+
+  .game-icon-sm {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #4caf50;
+    background: #0d2a18;
+    border: 1px solid #1a5a30;
+    border-radius: 4px;
+    padding: 0.05rem 0.3rem;
+    margin-right: 0.25rem;
+  }
+
+  .pick-icon {
+    font-size: 0.72rem;
+    opacity: 0.85;
   }
 
   .card-header {

@@ -385,6 +385,7 @@ export const getTable = query({
       createdAt: game.startedAt,
       seats: seats.sort((a, b) => a.seatIndex - b.seatIndex),
       watchers,
+      result: (game.result ?? null) as { losers?: number[]; winners?: number[]; scores?: number[] } | null,
     };
   },
 });
@@ -468,6 +469,11 @@ export const getMyGameState = query({
         gameType: game.gameType,
         strawmen: null,
         continuation: { votes, myVote },
+        lastHandSummary: (game.lastHandSummary ?? null) as {
+          deltas: { player: number; delta: number; reason: string }[];
+          runningTotals: number[];
+          seatNames: string[];
+        } | null,
       };
     }
 
@@ -532,6 +538,11 @@ export const getMyGameState = query({
       gameType: game.gameType,
       strawmen,
       continuation: null,
+      lastHandSummary: (game.lastHandSummary ?? null) as {
+        deltas: { player: number; delta: number; reason: string }[];
+        runningTotals: number[];
+        seatNames: string[];
+      } | null,
     };
   },
 });
@@ -902,6 +913,20 @@ async function _applyMoveLogic(
         ts: Date.now(),
       });
     }
+  }
+
+  // Persist last hand summary so the UI can display it prominently
+  const handScoredEvent = events.find((e) => e.type === "HAND_SCORED") as
+    | { type: "HAND_SCORED"; deltas: { player: number; delta: number; reason: string }[]; runningTotals: number[] }
+    | undefined;
+  if (handScoredEvent) {
+    await ctx.db.patch(gameId, {
+      lastHandSummary: {
+        deltas: handScoredEvent.deltas,
+        runningTotals: handScoredEvent.runningTotals,
+        seatNames,
+      },
+    });
   }
 
   // Append to game_moves
