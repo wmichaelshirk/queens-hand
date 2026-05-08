@@ -7,6 +7,11 @@
     convex, watchQuery,
   } from "$lib/convex";
   import { GAME_OPTIONS } from "$lib/gameConfig";
+  import type { Card, Move, StrawmanPileInfo } from "$lib/gameTypes";
+  import PlayingCard from "$lib/components/PlayingCard.svelte";
+  import HandCards from "$lib/components/HandCards.svelte";
+  import Trick from "$lib/components/Trick.svelte";
+  import Pile from "$lib/components/Pile.svelte";
 
   const gameId = $derived($page.params.gameId);
 
@@ -133,14 +138,6 @@
     phase: string;
   };
 
-  type Move =
-    | { type: "PLAY_CARD"; card: { suit: string; rank: string } }
-    | { type: "MAKE_BID"; bid: string }
-    | { type: "PASS_BID" }
-    | { type: "MAKE_ANNOUNCEMENT"; announcement: string };
-
-  type StrawmanPileInfo = { topCard: Card | null; depth: number };
-
   type ContinuationState = {
     votes: Record<string, "continue" | "quit">;
     myVote: "continue" | "quit" | null;
@@ -193,39 +190,6 @@
     if (move.type === "PASS_BID") return "Pass";
     if (move.type === "MAKE_ANNOUNCEMENT") return move.announcement;
     return "?";
-  }
-
-  function isRedSuit(suit: string): boolean {
-    return suit === "♥" || suit === "♦";
-  }
-
-  // Suit order: Tarock, ♣, ♦, ♥, ♠ — rank order covers both engines
-  const SUIT_ORDER: Record<string, number> = { T: 0, "♣": 1, "♦": 2, "♥": 3, "♠": 4 };
-  const RANK_ORDER: Record<string, number> = {
-    // Slobberhannes
-    "7": 0, "8": 1, "9": 2, "10": 3, J: 4, Q: 5, K: 6, A: 7,
-    // Strohmandeln suit cards
-    Kn: 8,
-    // Strohmandeln Tarock (I = weakest, ★ = strongest)
-    I: 0, II: 1, III: 2, IV: 3, V: 4, VI: 5, VII: 6, VIII: 7, IX: 8, X: 9,
-    XI: 10, XII: 11, XIII: 12, XIV: 13, XV: 14, XVI: 15, XVII: 16, XVIII: 17,
-    XIX: 18, XX: 19, XXI: 20, "★": 21,
-  };
-
-  type Card = { suit: string; rank: string };
-
-  function sortHand(cards: Card[]): Card[] {
-    return [...cards].sort((a, b) => {
-      const sd = (SUIT_ORDER[a.suit] ?? 99) - (SUIT_ORDER[b.suit] ?? 99);
-      if (sd !== 0) return sd;
-      return (RANK_ORDER[a.rank] ?? 50) - (RANK_ORDER[b.rank] ?? 50);
-    });
-  }
-
-  function isLegalMove(card: Card): boolean {
-    return ($gameState?.legalMoves ?? []).some(
-      (m) => m.type === "PLAY_CARD" && m.card.suit === card.suit && m.card.rank === card.rank
-    );
   }
 
   function seatName(engineIndex: number): string {
@@ -636,8 +600,8 @@
                     <div class="opponent-area">
                       <span class="opponent-name">{seat.displayName}{seat.isBot ? " 🤖" : ""}</span>
                       <div class="face-down-stack">
-                        {#each Array(Math.min(seat.handSize, 10)) as _, ci (ci)}
-                          <div class="playing-card face-down" style="--ci: {ci}"></div>
+                        {#each Array(Math.min(seat.handSize, 10)) as _}
+                          <PlayingCard />
                         {/each}
                         {#if seat.handSize === 0}
                           <span class="no-cards-label">no cards</span>
@@ -660,26 +624,7 @@
                 <div class="strawmen-label">{opponentName}'s piles</div>
                 <div class="strawmen-piles">
                   {#each opponentPiles as pile, i (i)}
-                    <div class="straw-pile" class:empty={!pile.topCard}>
-                      {#if pile.topCard}
-                        <div class="playing-card straw-card" class:card-red={isRedSuit(pile.topCard.suit)} class:card-tarock={pile.topCard.suit === 'T'}>
-                          <span class="card-top-left">
-                            <span class="cr-rank">{pile.topCard.rank}</span>
-                            <span class="cr-suit">{pile.topCard.suit === 'T' ? '★' : pile.topCard.suit}</span>
-                          </span>
-                          <span class="card-center">{pile.topCard.suit === 'T' ? pile.topCard.rank : pile.topCard.suit}</span>
-                          <span class="card-bottom-right">
-                            <span class="cr-rank">{pile.topCard.rank}</span>
-                            <span class="cr-suit">{pile.topCard.suit === 'T' ? '★' : pile.topCard.suit}</span>
-                          </span>
-                        </div>
-                        {#if pile.depth > 0}
-                          <div class="straw-depth">+{pile.depth}</div>
-                        {/if}
-                      {:else}
-                        <div class="straw-empty">—</div>
-                      {/if}
-                    </div>
+                    <Pile {pile} />
                   {/each}
                 </div>
               </div>
@@ -687,31 +632,11 @@
 
             <!-- Current trick -->
             {#if !$gameState.continuation}
-              <div class="trick-area">
-                <div class="trick-label">Trick {$gameState.publicState.trickNum + 1}</div>
-                {#if $gameState.publicState.currentTrick.length > 0}
-                  <div class="trick-cards">
-                    {#each $gameState.publicState.currentTrick as play}
-                      <div class="trick-card-wrap">
-                        <div class="playing-card trick-card" class:card-red={isRedSuit(play.card.suit)} class:card-tarock={play.card.suit === 'T'}>
-                          <span class="card-top-left">
-                            <span class="cr-rank">{play.card.rank}</span>
-                            <span class="cr-suit">{play.card.suit === 'T' ? '★' : play.card.suit}</span>
-                          </span>
-                          <span class="card-center">{play.card.suit === 'T' ? play.card.rank : play.card.suit}</span>
-                          <span class="card-bottom-right">
-                            <span class="cr-rank">{play.card.rank}</span>
-                            <span class="cr-suit">{play.card.suit === 'T' ? '★' : play.card.suit}</span>
-                          </span>
-                        </div>
-                        <span class="trick-player-name">{seatName(play.playerIndex)}</span>
-                      </div>
-                    {/each}
-                  </div>
-                {:else}
-                  <div class="trick-empty">—</div>
-                {/if}
-              </div>
+              <Trick
+                trick={$gameState.publicState.currentTrick}
+                trickNum={$gameState.publicState.trickNum}
+                {seatName}
+              />
             {/if}
 
             <!-- My strawman piles (Strohmandeln only) -->
@@ -721,26 +646,7 @@
                 <div class="strawmen-label">Your piles</div>
                 <div class="strawmen-piles">
                   {#each myPiles as pile, i (i)}
-                    <div class="straw-pile" class:empty={!pile.topCard}>
-                      {#if pile.topCard}
-                        <div class="playing-card straw-card" class:card-red={isRedSuit(pile.topCard.suit)} class:card-tarock={pile.topCard.suit === 'T'}>
-                          <span class="card-top-left">
-                            <span class="cr-rank">{pile.topCard.rank}</span>
-                            <span class="cr-suit">{pile.topCard.suit === 'T' ? '★' : pile.topCard.suit}</span>
-                          </span>
-                          <span class="card-center">{pile.topCard.suit === 'T' ? pile.topCard.rank : pile.topCard.suit}</span>
-                          <span class="card-bottom-right">
-                            <span class="cr-rank">{pile.topCard.rank}</span>
-                            <span class="cr-suit">{pile.topCard.suit === 'T' ? '★' : pile.topCard.suit}</span>
-                          </span>
-                        </div>
-                        {#if pile.depth > 0}
-                          <div class="straw-depth">+{pile.depth}</div>
-                        {/if}
-                      {:else}
-                        <div class="straw-empty">—</div>
-                      {/if}
-                    </div>
+                    <Pile {pile} />
                   {/each}
                 </div>
               </div>
@@ -762,38 +668,13 @@
 
             <!-- Your hand (click to play) -->
             {#if $gameState.myHand.length > 0}
-              <div class="hand-section">
-                <div class="hand-label">
-                  {isMyTurn ? "Your turn — click a card to play" : "Your hand"}
-                </div>
-                <div class="hand-cards">
-                  {#each sortHand($gameState.myHand) as card (`${card.suit}${card.rank}`)}
-                    {@const legal = isMyTurn && isLegalMove(card)}
-                    <div
-                      class="playing-card"
-                      class:card-red={isRedSuit(card.suit)}
-                      class:card-tarock={card.suit === 'T'}
-                      class:card-playable={legal}
-                      class:card-dimmed={isMyTurn && !legal}
-                      onclick={() => legal && !busy && playMove({ type: 'PLAY_CARD', card })}
-                      role="button"
-                      tabindex={legal ? 0 : -1}
-                      aria-disabled={!legal || busy}
-                      onkeydown={(e) => e.key === 'Enter' && legal && !busy && playMove({ type: 'PLAY_CARD', card })}
-                    >
-                      <span class="card-top-left">
-                        <span class="cr-rank">{card.rank}</span>
-                        <span class="cr-suit">{card.suit === 'T' ? '★' : card.suit}</span>
-                      </span>
-                      <span class="card-center">{card.suit === 'T' ? card.rank : card.suit}</span>
-                      <span class="card-bottom-right">
-                        <span class="cr-rank">{card.rank}</span>
-                        <span class="cr-suit">{card.suit === 'T' ? '★' : card.suit}</span>
-                      </span>
-                    </div>
-                  {/each}
-                </div>
-              </div>
+              <HandCards
+                cards={$gameState.myHand}
+                legalMoves={$gameState.legalMoves}
+                isMyTurn={isMyTurn}
+                {busy}
+                onplay={(card) => playMove({ type: 'PLAY_CARD', card })}
+              />
             {/if}
 
           {:else}
@@ -1328,134 +1209,6 @@
     color: #e0e0e0;
   }
 
-  /* ── Playing cards ───────────────────────────────────────────────────────── */
-  .playing-card {
-    position: relative;
-    display: inline-flex;
-    flex-direction: column;
-    justify-content: space-between;
-    width: 54px;
-    height: 80px;
-    background: #f8f5ee;
-    border: 1px solid #bbb;
-    border-radius: 7px;
-    padding: 3px 4px;
-    font-family: system-ui, sans-serif;
-    color: #1a1a2e;
-    user-select: none;
-    transition: transform 0.12s ease, box-shadow 0.12s ease;
-    flex-shrink: 0;
-  }
-
-  .playing-card.card-red    { color: #c0392b; }
-  .playing-card.card-tarock { color: #6c3fbd; }
-
-  .playing-card.card-playable {
-    cursor: pointer;
-    transform: translateY(-8px);
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
-    border-color: #f1c40f;
-    border-width: 2px;
-  }
-  .playing-card.card-playable:hover {
-    transform: translateY(-12px);
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.55);
-  }
-  .playing-card.card-dimmed {
-    opacity: 0.32;
-    filter: grayscale(20%);
-  }
-
-  .playing-card.face-down {
-    background: #1a3464;
-    border-color: #0f244a;
-    cursor: default;
-    position: relative;
-    overflow: hidden;
-  }
-  .playing-card.face-down::after {
-    content: '';
-    position: absolute;
-    inset: 4px;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 4px;
-    background: repeating-linear-gradient(
-      45deg,
-      rgba(255, 255, 255, 0.04),
-      rgba(255, 255, 255, 0.04) 2px,
-      transparent 2px,
-      transparent 8px
-    );
-  }
-
-  .playing-card.trick-card  { width: 54px; height: 80px; }
-  .playing-card.straw-card  { width: 52px; height: 76px; }
-
-  .card-top-left {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    line-height: 1;
-    gap: 0px;
-  }
-  .card-bottom-right {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    line-height: 1;
-    transform: rotate(180deg);
-    gap: 0px;
-    align-self: flex-end;
-  }
-  .cr-rank { font-size: 0.72rem; font-weight: 800; line-height: 1.1; }
-  .cr-suit { font-size: 0.58rem; line-height: 1; }
-
-  .card-center {
-    text-align: center;
-    font-size: 1.35rem;
-    line-height: 1;
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: 600;
-  }
-
-  /* ── Trick area ──────────────────────────────────────────────────────────── */
-  .trick-area {
-    display: flex;
-    flex-direction: column;
-    gap: 0.6rem;
-    align-items: center;
-  }
-
-  .trick-label {
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: #555;
-  }
-
-  .trick-cards {
-    display: flex;
-    gap: 1rem;
-    flex-wrap: wrap;
-    justify-content: center;
-    align-items: flex-end;
-  }
-
-  .trick-card-wrap {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.3rem;
-  }
-  .trick-player-name {
-    font-size: 0.65rem;
-    color: #666;
-  }
-
-  .trick-empty { font-size: 1.2rem; color: #333; }
 
   /* ── Opponents row ───────────────────────────────────────────────────────── */
   .opponents-row {
@@ -1486,11 +1239,11 @@
     position: relative;
   }
 
-  .face-down-stack .playing-card.face-down {
+  .face-down-stack :global(.playing-card) {
     margin-left: -28px;
     transition: none;
   }
-  .face-down-stack .playing-card.face-down:first-child {
+  .face-down-stack :global(.playing-card:first-child) {
     margin-left: 0;
   }
 
@@ -1536,24 +1289,6 @@
     gap: 0.25rem;
   }
 
-  .straw-depth {
-    font-size: 0.68rem;
-    color: #666;
-    letter-spacing: 0.04em;
-  }
-
-  .straw-empty {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.9rem;
-    color: #2a3a50;
-    background: #0d1528;
-    border: 1px dashed #1a2a40;
-    border-radius: 7px;
-    width: 52px;
-    height: 76px;
-  }
 
   /* ── Between-hands vote (Strohmandeln) ───────────────────────────────────── */
   .vote-section {
@@ -1659,31 +1394,6 @@
   }
   .move-btn:hover:not(:disabled) { background: #1a5a90; border-color: #e94560; }
   .move-btn:disabled { opacity: 0.45; cursor: default; }
-
-  /* ── Hand section ────────────────────────────────────────────────────────── */
-  .hand-section {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-    align-items: center;
-    border-top: 1px solid #0f3460;
-    padding-top: 1.5rem;
-  }
-
-  .hand-label {
-    font-size: 0.72rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: #666;
-  }
-
-  .hand-cards {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.35rem;
-    justify-content: center;
-    padding-bottom: 10px; /* room for playable lift */
-  }
 
   /* ── Hand summary ────────────────────────────────────────────────────────── */
   .hand-summary {
