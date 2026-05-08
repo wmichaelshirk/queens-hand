@@ -43,12 +43,14 @@
   <div class="hand-cards">
     {#each sortHand(cards) as card (`${card.suit}${card.rank}`)}
       {@const legal = isMyTurn && isLegal(card)}
-      <PlayingCard
-        {card}
-        playable={legal}
-        dimmed={isMyTurn && !legal}
-        onclick={legal && !busy ? () => onplay(card) : undefined}
-      />
+      <div class="card-wrap">
+        <PlayingCard
+          {card}
+          playable={legal}
+          dimmed={isMyTurn && !legal}
+          onclick={legal && !busy ? () => onplay(card) : undefined}
+        />
+      </div>
     {/each}
   </div>
 </div>
@@ -73,8 +75,15 @@
   .hand-cards {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.35rem;
     justify-content: center;
-    padding-bottom: 10px;
+    padding-bottom: 20px;
+  }
+
+  .card-wrap {
+    position: relative;
+    margin-left: -35px;
+  }
+  .card-wrap:first-child {
+    margin-left: 0;
   }
 </style>

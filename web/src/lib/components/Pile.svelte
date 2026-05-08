@@ -43,7 +43,7 @@
     background: #0d1528;
     border: 1px dashed #1a2a40;
     border-radius: 7px;
-    width: 52px;
-    height: 76px;
+    width: 65px;
+    height: 91px;
   }
 </style>
