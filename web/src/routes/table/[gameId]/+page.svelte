@@ -12,6 +12,8 @@
   import HandCards from "$lib/components/HandCards.svelte";
   import Trick from "$lib/components/Trick.svelte";
   import Pile from "$lib/components/Pile.svelte";
+  import PlayerToken from "$lib/components/PlayerToken.svelte";
+  import { getSlotForSeat } from "$lib/tableLayout";
 
   const gameId = $derived($page.params.gameId);
 
@@ -177,6 +179,31 @@
   const nonCardMoves = $derived(
     ($gameState?.legalMoves ?? []).filter((m) => m.type !== "PLAY_CARD")
   );
+
+  const seatSlots = $derived(
+    $gameState
+      ? $gameState.seats.map(s => ({
+          ...s,
+          slot: getSlotForSeat(
+            myEngineIndex >= 0 ? myEngineIndex : 0,
+            s.enginePlayerIndex,
+            $gameState!.seats.length
+          ),
+        }))
+      : []
+  );
+
+  const topRowSeats = $derived(
+    seatSlots
+      .filter(s => s.slot === 'top' || s.slot === 'top-left' || s.slot === 'top-right')
+      .sort((a, b) => {
+        const order: Record<string, number> = { 'top-left': 0, 'top': 1, 'top-right': 2 };
+        return (order[a.slot] ?? 1) - (order[b.slot] ?? 1);
+      })
+  );
+  const leftSeats     = $derived(seatSlots.filter(s => s.slot === 'left'));
+  const rightSeats    = $derived(seatSlots.filter(s => s.slot === 'right'));
+  const myBottomSeat  = $derived(seatSlots.find(s => s.slot === 'bottom'));
 
   let showHandSummary = $state(true);
   $effect(() => {
@@ -512,27 +539,6 @@
       {:else if $tableData.status === "active" || $tableData.status === "between_hands"}
         <div class="game-active">
           {#if $gameState}
-            <!-- Turn banner -->
-            <div class="turn-banner" class:my-turn={isMyTurn}>
-              {#if $gameState.continuation}
-                Hand complete
-              {:else if isMyTurn}
-                Your turn
-              {:else}
-                Waiting for {seatName($gameState.publicState.currentTurn)}…
-              {/if}
-            </div>
-
-            <!-- Scores row -->
-            <div class="scores-row">
-              {#each $gameState.seats as seat (seat.seatIndex)}
-                <div class="score-chip" class:active-turn={seat.enginePlayerIndex === $gameState.publicState.currentTurn}>
-                  <span class="score-name">{seat.displayName}{seat.isBot ? " 🤖" : ""}</span>
-                  <span class="score-val">{$gameState.publicState.scores[seat.enginePlayerIndex] ?? 0}</span>
-                </div>
-              {/each}
-            </div>
-
             <!-- Last hand summary (both games) -->
             {#if $gameState.lastHandSummary && showHandSummary}
               {@const hs = $gameState.lastHandSummary}
@@ -589,103 +595,130 @@
                   <p class="muted centered">Waiting for other players…</p>
                 {/if}
               </div>
-            {/if}
+            {:else}
+              <!-- Three-row table layout -->
+              <div class="table-layout">
 
-            <!-- Opponents (face-down cards) -->
-            {#if !$gameState.continuation}
-              {@const opponents = $gameState.seats.filter(s => s.playerId !== myId)}
-              {#if opponents.length > 0}
-                <div class="opponents-row">
-                  {#each opponents as seat (seat.seatIndex)}
-                    <div class="opponent-area">
-                      <span class="opponent-name">{seat.displayName}{seat.isBot ? " 🤖" : ""}</span>
-                      <div class="face-down-stack">
-                        {#each Array(Math.min(seat.handSize, 10)) as _}
-                          <PlayingCard />
+                <!-- Row 1: top players (0–3), horizontal -->
+                {#if topRowSeats.length > 0}
+                  <div class="top-row">
+                    {#each topRowSeats as seat (seat.seatIndex)}
+                      <PlayerToken
+                        name={seat.displayName}
+                        isBot={seat.isBot}
+                        cardCount={seat.handSize}
+                        slot={seat.slot}
+                        score={$gameState.publicState.scores[seat.enginePlayerIndex] ?? 0}
+                        isCurrentTurn={seat.enginePlayerIndex === $gameState.publicState.currentTurn}
+                      />
+                    {/each}
+                  </div>
+                {/if}
+
+                <!-- Row 2: left side | table center | right side -->
+                <div class="middle-row">
+                  <div class="side-left">
+                    {#each leftSeats as seat (seat.seatIndex)}
+                      <PlayerToken
+                        name={seat.displayName}
+                        isBot={seat.isBot}
+                        cardCount={seat.handSize}
+                        slot="left"
+                        score={$gameState.publicState.scores[seat.enginePlayerIndex] ?? 0}
+                        isCurrentTurn={seat.enginePlayerIndex === $gameState.publicState.currentTurn}
+                      />
+                    {/each}
+                  </div>
+
+                  <div class="table-center">
+                    {#if $gameState.strawmen}
+                      {@const opponentEngineIdx = myEngineIndex === 0 ? 1 : 0}
+                      {@const opponentPiles = $gameState.strawmen[opponentEngineIdx] ?? []}
+                      <div class="strawmen-piles">
+                        {#each opponentPiles as pile, i (i)}
+                          <Pile {pile} />
                         {/each}
-                        {#if seat.handSize === 0}
-                          <span class="no-cards-label">no cards</span>
-                        {:else if seat.handSize > 10}
-                          <span class="stack-overflow">+{seat.handSize - 10}</span>
-                        {/if}
+                      </div>
+                    {/if}
+                    <Trick
+                      trick={$gameState.publicState.currentTrick}
+                      trickNum={$gameState.publicState.trickNum}
+                      {seatName}
+                    />
+                  </div>
+
+                  <div class="side-right">
+                    {#each rightSeats as seat (seat.seatIndex)}
+                      <PlayerToken
+                        name={seat.displayName}
+                        isBot={seat.isBot}
+                        cardCount={seat.handSize}
+                        slot="right"
+                        score={$gameState.publicState.scores[seat.enginePlayerIndex] ?? 0}
+                        isCurrentTurn={seat.enginePlayerIndex === $gameState.publicState.currentTurn}
+                      />
+                    {/each}
+                  </div>
+                </div>
+
+                <!-- Row 3: current player -->
+                <div class="bottom-row">
+                  {#if myBottomSeat}
+                    <PlayerToken
+                      name={myBottomSeat.displayName}
+                      isBot={myBottomSeat.isBot}
+                      cardCount={0}
+                      slot="bottom"
+                      score={$gameState.publicState.scores[myBottomSeat.enginePlayerIndex] ?? 0}
+                      isCurrentTurn={isMyTurn}
+                    />
+                  {/if}
+
+                  {#if $gameState.strawmen}
+                    {@const myPiles = $gameState.strawmen[myEngineIndex] ?? []}
+                    <div class="strawmen-piles">
+                      {#each myPiles as pile, i (i)}
+                        {@const topCard = pile.topCard}
+                        {@const pilePlayable = isMyTurn && !!topCard && ($gameState?.legalMoves ?? []).some(
+                          m => m.type === 'PLAY_CARD' && m.card.suit === topCard.suit && m.card.rank === topCard.rank
+                        )}
+                        <Pile
+                          {pile}
+                          playable={pilePlayable}
+                          dimmed={isMyTurn && !pilePlayable}
+                          onclick={pilePlayable && !busy && topCard
+                            ? () => playMove({ type: 'PLAY_CARD', card: topCard })
+                            : undefined}
+                        />
+                      {/each}
+                    </div>
+                  {/if}
+
+                  {#if isMyTurn && nonCardMoves.length > 0}
+                    <div class="move-section">
+                      <div class="move-prompt">Choose your action:</div>
+                      <div class="move-grid">
+                        {#each nonCardMoves as move, i (i)}
+                          <button class="move-btn" onclick={() => playMove(move)} disabled={busy}>
+                            {moveLabel(move)}
+                          </button>
+                        {/each}
                       </div>
                     </div>
-                  {/each}
-                </div>
-              {/if}
-            {/if}
+                  {/if}
 
-            <!-- Opponent strawman piles (Strohmandeln only) -->
-            {#if $gameState.strawmen && !$gameState.continuation}
-              {@const opponentIndex = myEngineIndex === 0 ? 1 : 0}
-              {@const opponentName = seatName(opponentIndex)}
-              {@const opponentPiles = $gameState.strawmen[opponentIndex] ?? []}
-              <div class="strawmen-row opponent">
-                <div class="strawmen-label">{opponentName}'s piles</div>
-                <div class="strawmen-piles">
-                  {#each opponentPiles as pile, i (i)}
-                    <Pile {pile} />
-                  {/each}
-                </div>
-              </div>
-            {/if}
-
-            <!-- Current trick -->
-            {#if !$gameState.continuation}
-              <Trick
-                trick={$gameState.publicState.currentTrick}
-                trickNum={$gameState.publicState.trickNum}
-                {seatName}
-              />
-            {/if}
-
-            <!-- My strawman piles (Strohmandeln only) -->
-            {#if $gameState.strawmen && !$gameState.continuation}
-              {@const myPiles = $gameState.strawmen[myEngineIndex] ?? []}
-              <div class="strawmen-row mine">
-                <div class="strawmen-label">Your piles</div>
-                <div class="strawmen-piles">
-                  {#each myPiles as pile, i (i)}
-                    {@const topCard = pile.topCard}
-                    {@const pilePlayable = isMyTurn && !!topCard && ($gameState?.legalMoves ?? []).some(
-                      m => m.type === 'PLAY_CARD' && m.card.suit === topCard.suit && m.card.rank === topCard.rank
-                    )}
-                    <Pile
-                      {pile}
-                      playable={pilePlayable}
-                      dimmed={isMyTurn && !pilePlayable}
-                      onclick={pilePlayable && !busy && topCard
-                        ? () => playMove({ type: 'PLAY_CARD', card: topCard })
-                        : undefined}
+                  {#if $gameState.myHand.length > 0}
+                    <HandCards
+                      cards={$gameState.myHand}
+                      legalMoves={$gameState.legalMoves}
+                      isMyTurn={isMyTurn}
+                      {busy}
+                      onplay={(card) => playMove({ type: 'PLAY_CARD', card })}
                     />
-                  {/each}
+                  {/if}
                 </div>
-              </div>
-            {/if}
 
-            <!-- Non-card moves (bids, announcements) -->
-            {#if isMyTurn && nonCardMoves.length > 0}
-              <div class="move-section">
-                <div class="move-prompt">Choose your action:</div>
-                <div class="move-grid">
-                  {#each nonCardMoves as move, i (i)}
-                    <button class="move-btn" onclick={() => playMove(move)} disabled={busy}>
-                      {moveLabel(move)}
-                    </button>
-                  {/each}
-                </div>
               </div>
-            {/if}
-
-            <!-- Your hand (click to play) -->
-            {#if $gameState.myHand.length > 0}
-              <HandCards
-                cards={$gameState.myHand}
-                legalMoves={$gameState.legalMoves}
-                isMyTurn={isMyTurn}
-                {busy}
-                onplay={(card) => playMove({ type: 'PLAY_CARD', card })}
-              />
             {/if}
 
           {:else}
@@ -1167,109 +1200,71 @@
     flex-direction: column;
     gap: 1.5rem;
     width: 100%;
-    max-width: 640px;
+    max-width: 820px;
   }
 
-  .turn-banner {
-    text-align: center;
-    font-size: 1rem;
-    font-weight: 600;
-    color: #888;
-    padding: 0.6rem 1rem;
-    background: #12192e;
-    border: 1px solid #0f3460;
-    border-radius: 8px;
-  }
-  .turn-banner.my-turn {
-    color: #e94560;
-    border-color: #e94560;
-    background: #1e1020;
-  }
-
-  .scores-row {
+  /* ── Three-row table layout ──────────────────────────────────────────────── */
+  .table-layout {
     display: flex;
+    flex-direction: column;
     gap: 0.75rem;
+    width: 100%;
+  }
+
+  /* Row 1: top players, displayed horizontally with spacing */
+  .top-row {
+    display: flex;
     justify-content: center;
+    gap: 3rem;
     flex-wrap: wrap;
   }
 
-  .score-chip {
+  /* Row 2: left side | center table | right side */
+  .middle-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    width: 100%;
+  }
+
+  .side-left {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 0.15rem;
-    background: #16213e;
-    border: 1px solid #0f3460;
-    border-radius: 8px;
-    padding: 0.5rem 0.9rem;
-    min-width: 70px;
-  }
-  .score-chip.active-turn {
-    border-color: #e94560;
-    background: #1e1020;
-  }
-
-  .score-name {
-    font-size: 0.75rem;
-    color: #888;
-  }
-
-  .score-val {
-    font-size: 1.2rem;
-    font-weight: 700;
-    color: #e0e0e0;
-  }
-
-
-  /* ── Opponents row ───────────────────────────────────────────────────────── */
-  .opponents-row {
-    display: flex;
-    gap: 2rem;
-    justify-content: center;
-    flex-wrap: wrap;
-    padding: 0.25rem 0 0.5rem;
-  }
-
-  .opponent-area {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.4rem;
-  }
-
-  .opponent-name {
-    font-size: 0.72rem;
-    color: #888;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-  }
-
-  .face-down-stack {
-    display: flex;
     align-items: flex-end;
-    position: relative;
+    justify-content: center;
+    gap: 1.5rem;
+    flex-shrink: 0;
   }
 
-  .face-down-stack :global(.playing-card) {
-    margin-left: -28px;
-    transition: none;
-  }
-  .face-down-stack :global(.playing-card:first-child) {
-    margin-left: 0;
-  }
-
-  .no-cards-label {
-    font-size: 0.75rem;
-    color: #444;
-    font-style: italic;
+  .table-center {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    min-width: 0;
   }
 
-  .stack-overflow {
-    font-size: 0.72rem;
-    color: #666;
-    margin-left: 4px;
-    align-self: center;
+  .side-right {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 1.5rem;
+    flex-shrink: 0;
   }
+
+  /* Row 3: current player — always full width */
+  .bottom-row {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    width: 100%;
+  }
+
+
 
   /* ── Strawman piles (Strohmandeln) ───────────────────────────────────────── */
   .strawmen-row {
