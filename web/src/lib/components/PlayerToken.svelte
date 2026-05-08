@@ -12,13 +12,7 @@
     isCurrentTurn?: boolean;
   } = $props();
 
-  const MAX_H = 10;
-  const MAX_V = 6;
-
   const vertical = $derived(isVerticalSlot(slot));
-  const maxCards = $derived(vertical ? MAX_V : MAX_H);
-  const shownCount = $derived(Math.min(cardCount, maxCards));
-  const overflow = $derived(cardCount > maxCards ? cardCount - maxCards : 0);
 </script>
 
 <div class="player-token" class:current-turn={isCurrentTurn} class:vertical>
@@ -27,34 +21,32 @@
     <!-- Info on the outside-left, rotated -90° (reads bottom→top) -->
     <div class="info-wrap">
       <div class="token-info rotate-neg">
-        <div class="avatar">?</div>
-        <span class="token-name">{name}{isBot ? ' 🤖' : ''}</span>
+        <div class="avatar">{isBot ? ' 🤖' : '?'}</div>
+        <span class="token-name">{name}</span>
         {#if score !== undefined}<span class="token-score">{score}</span>{/if}
       </div>
     </div>
-    <div class="card-stack vert">
+    <div class="card-stack vert left-stack" style="--n: {cardCount}">
       {#if cardCount === 0}
         <span class="no-cards">—</span>
       {:else}
-        {#each Array(shownCount) as _}<PlayingCard />{/each}
-        {#if overflow > 0}<span class="overflow">+{overflow}</span>{/if}
+        {#each Array(cardCount) as _}<PlayingCard />{/each}
       {/if}
     </div>
 
   {:else if slot === 'right'}
     <!-- Cards first, then info on the outside-right, rotated +90° (reads top→bottom) -->
-    <div class="card-stack vert">
+    <div class="card-stack vert right-stack" style="--n: {cardCount}">
       {#if cardCount === 0}
         <span class="no-cards">—</span>
       {:else}
-        {#each Array(shownCount) as _}<PlayingCard />{/each}
-        {#if overflow > 0}<span class="overflow">+{overflow}</span>{/if}
+        {#each Array(cardCount) as _}<PlayingCard />{/each}
       {/if}
     </div>
     <div class="info-wrap">
       <div class="token-info rotate-pos">
-        <div class="avatar">?</div>
-        <span class="token-name">{name}{isBot ? ' 🤖' : ''}</span>
+        <div class="avatar">{isBot ? ' 🤖' : '?'}</div>
+        <span class="token-name">{name}</span>
         {#if score !== undefined}<span class="token-score">{score}</span>{/if}
       </div>
     </div>
@@ -70,16 +62,15 @@
   {:else}
     <!-- Horizontal top slots: info on top, fan below -->
     <div class="token-info">
-      <div class="avatar">?</div>
-      <span class="token-name">{name}{isBot ? ' 🤖' : ''}</span>
+      <div class="avatar">{isBot ? ' 🤖' : '?'}</div>
+      <span class="token-name">{name}</span>
       {#if score !== undefined}<span class="token-score">{score}</span>{/if}
     </div>
-    <div class="card-stack horiz">
+    <div class="card-stack horiz" style="--n: {cardCount}">
       {#if cardCount === 0}
         <span class="no-cards">—</span>
       {:else}
-        {#each Array(shownCount) as _}<PlayingCard />{/each}
-        {#if overflow > 0}<span class="overflow">+{overflow}</span>{/if}
+        {#each Array(cardCount) as _}<PlayingCard />{/each}
       {/if}
     </div>
   {/if}
@@ -172,7 +163,8 @@
     align-items: flex-end;
   }
   .card-stack.horiz :global(.playing-card) {
-    margin-left: -28px;
+    /* compress from -20px (few cards) to -50px (many cards) to stay within ~240px */
+    margin-left: clamp(-50px, calc(240px / var(--n, 1) - 70px), -20px);
     transition: none;
   }
   .card-stack.horiz :global(.playing-card:first-child) {
@@ -186,22 +178,19 @@
     align-items: center;
   }
   .card-stack.vert :global(.playing-card) {
-    margin-top: -63px;
+    /* compress from -50px (few cards) to -80px (many cards) to stay within ~200px */
+    margin-top: clamp(-80px, calc(200px / var(--n, 1) - 98px), -50px);
     transition: none;
   }
   .card-stack.vert :global(.playing-card:first-child) {
     margin-top: 0;
   }
 
-  .overflow {
-    font-size: 0.72rem;
-    color: #666;
-    align-self: center;
-    margin-left: 4px;
+  .card-stack.left-stack :global(.playing-card) {
+    transform: rotate(-90deg);
   }
-  .card-stack.vert .overflow {
-    margin-left: 0;
-    margin-top: 6px;
+  .card-stack.right-stack :global(.playing-card) {
+    transform: rotate(90deg);
   }
 
   .no-cards {

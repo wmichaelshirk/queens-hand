@@ -83,7 +83,10 @@
     font-family:  'Courier New', Courier, monospace;
     color: #1a1a2e;
     user-select: none;
-    transition: transform 0.12s ease, box-shadow 0.12s ease;
+    top: 0;
+    z-index: 0;
+    overflow: hidden;
+    transition: top 0.12s ease, box-shadow 0.12s ease;
     flex-shrink: 0;
   }
 
@@ -96,7 +99,7 @@
     border-width: 2px;
   }
   .playing-card.card-playable:hover {
-    transform: translateY(-18px);
+    top: -18px;
     box-shadow: 0 10px 24px rgba(0, 0, 0, 0.55);
   }
 

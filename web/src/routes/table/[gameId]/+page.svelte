@@ -10,6 +10,7 @@
   import type { Card, Move, StrawmanPileInfo } from "$lib/gameTypes";
   import PlayingCard from "$lib/components/PlayingCard.svelte";
   import HandCards from "$lib/components/HandCards.svelte";
+  import { slobberhannesSort, strohmandelnSort } from "$lib/cardSort";
   import Trick from "$lib/components/Trick.svelte";
   import Pile from "$lib/components/Pile.svelte";
   import PlayerToken from "$lib/components/PlayerToken.svelte";
@@ -714,6 +715,7 @@
                       isMyTurn={isMyTurn}
                       {busy}
                       onplay={(card) => playMove({ type: 'PLAY_CARD', card })}
+                      sortFn={$tableData.gameType === 'strohmandeln' ? strohmandelnSort : slobberhannesSort}
                     />
                   {/if}
                 </div>
