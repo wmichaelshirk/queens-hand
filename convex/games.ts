@@ -462,6 +462,7 @@ export const getMyGameState = query({
           currentTurn: -1,
           trickNum: 0,
           phase: "hand_over",
+          lastCompletedTrick: null as { plays: { playerIndex: number; card: any }[]; winner: number } | null,
         },
         myHand: [] as Card[],
         legalMoves: [] as Move[],
@@ -531,6 +532,7 @@ export const getMyGameState = query({
         currentTurn: publicState.currentTurn,
         trickNum: publicState.trickNum,
         phase: publicState.phase,
+        lastCompletedTrick: (publicState.lastCompletedTrick ?? null) as { plays: { playerIndex: number; card: any }[]; winner: number } | null,
       },
       myHand,
       legalMoves,
@@ -822,10 +824,10 @@ export const applyMove = mutation({
     const myEngineIndex = sortedSeats.findIndex((s) => s.playerId === player._id);
     if (myEngineIndex === -1) throw new Error("You are not seated at this game");
 
-    const { nextIsBot } = await _applyMoveLogic(ctx, gameId, myEngineIndex, move as Move);
+    const { nextIsBot, trickJustResolved } = await _applyMoveLogic(ctx, gameId, myEngineIndex, move as Move);
 
     if (nextIsBot) {
-      await ctx.scheduler.runAfter(0, internal.games.applyBotMoves, { gameId });
+      await ctx.scheduler.runAfter(trickJustResolved ? 1200 : 0, internal.games.applyBotMoves, { gameId });
     }
   },
 });
@@ -861,15 +863,15 @@ async function _applyMoveLogic(
   gameId: Id<"games">,
   enginePlayerIndex: number,
   move: Move,
-): Promise<{ nextIsBot: boolean }> {
+): Promise<{ nextIsBot: boolean; trickJustResolved: boolean }> {
   const game = await ctx.db.get(gameId);
-  if (!game || game.status !== "active") return { nextIsBot: false };
+  if (!game || game.status !== "active") return { nextIsBot: false, trickJustResolved: false };
 
   const liveStateRow = await ctx.db
     .query("game_live_state")
     .withIndex("by_game", (q) => q.eq("gameId", gameId))
     .unique();
-  if (!liveStateRow) return { nextIsBot: false };
+  if (!liveStateRow) return { nextIsBot: false, trickJustResolved: false };
 
   const allSeats = await ctx.db
     .query("game_seats")
@@ -900,6 +902,21 @@ async function _applyMoveLogic(
 
   // Apply the move
   const { state: nextState, events } = adapter.applyMove(state, move);
+
+  // Capture the completed trick before state is written (engine clears currentTrick immediately)
+  const trickResolvedEvent = events.find(e => e.type === "TRICK_RESOLVED") as
+    | { type: "TRICK_RESOLVED"; winner: number }
+    | undefined;
+  let lastTrickPatch: { plays: { playerIndex: number; card: any }[]; winner: number } | undefined;
+  if (trickResolvedEvent && (move as any).type === "PLAY_CARD") {
+    lastTrickPatch = {
+      plays: [
+        ...(state.currentTrick as { playerIndex: number; card: any }[]),
+        { playerIndex: adapter.getCurrentPlayer(state), card: (move as any).card },
+      ],
+      winner: trickResolvedEvent.winner,
+    };
+  }
 
   // Insert event messages into chat
   if (events.length > 0) {
@@ -947,14 +964,14 @@ async function _applyMoveLogic(
   // Handle terminal states
   if (adapter.isGameOver(nextState)) {
     await _finalizeGame(ctx, gameId, game.creatorPlayerId, nextState, adapter, sortedSeats);
-    return { nextIsBot: false };
+    return { nextIsBot: false, trickJustResolved: false };
   }
 
   if (adapter.isHandOver(nextState)) {
     if (game.gameType === "strohmandeln") {
       // Strohmandeln has no fixed session end — pause and ask players whether to continue.
       await _enterBetweenHands(ctx, gameId, game, nextState, sortedSeats, seatNames);
-      return { nextIsBot: false };
+      return { nextIsBot: false, trickJustResolved: false };
     }
 
     // Other games (Slobberhannes): immediate re-deal
@@ -989,16 +1006,16 @@ async function _applyMoveLogic(
 
     const nextPlayer = adapter.getCurrentPlayer(newHandState);
     const nextIsBot = await _isBot(ctx, sortedSeats, nextPlayer);
-    return { nextIsBot };
+    return { nextIsBot, trickJustResolved: false };
   }
 
   // Normal move: update live state and public state
   await ctx.db.patch(liveStateRow._id, { state: nextState });
-  await _updatePublicAndHands(ctx, gameId, nextState, sortedSeats, adapter);
+  await _updatePublicAndHands(ctx, gameId, nextState, sortedSeats, adapter, lastTrickPatch);
 
   const nextPlayer = adapter.getCurrentPlayer(nextState);
   const nextIsBot = await _isBot(ctx, sortedSeats, nextPlayer);
-  return { nextIsBot };
+  return { nextIsBot, trickJustResolved: lastTrickPatch !== undefined };
 }
 
 async function _updatePublicAndHands(
@@ -1007,6 +1024,7 @@ async function _updatePublicAndHands(
   state: any,
   sortedSeats: Doc<"game_seats">[],
   adapter: EngineAdapter,
+  lastTrickPatch?: { plays: { playerIndex: number; card: any }[]; winner: number },
 ) {
   const publicRow = await ctx.db
     .query("game_public_state")
@@ -1020,6 +1038,7 @@ async function _updatePublicAndHands(
       currentTurn: adapter.getCurrentPlayer(state),
       trickNum: state.trickNum ?? 0,
       phase: state.phase ?? "playing",
+      ...(lastTrickPatch !== undefined ? { lastCompletedTrick: lastTrickPatch } : {}),
     });
   }
 
@@ -1386,6 +1405,9 @@ export const applyBotMoves = internalAction({
       });
 
       if (!result.nextIsBot) break;
+      if (result.trickJustResolved) {
+        await new Promise<void>(r => setTimeout(r, 1200));
+      }
     }
   },
 });

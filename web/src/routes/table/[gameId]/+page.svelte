@@ -139,6 +139,7 @@
     currentTurn: number;
     trickNum: number;
     phase: string;
+    lastCompletedTrick: { plays: { playerIndex: number; card: { suit: string; rank: string } }[]; winner: number } | null;
   };
 
   type ContinuationState = {
@@ -643,8 +644,14 @@
                     {/if}
                     <Trick
                       trick={$gameState.publicState.currentTrick}
+                      lastCompletedTrick={$gameState.publicState.lastCompletedTrick}
                       trickNum={$gameState.publicState.trickNum}
                       {seatName}
+                      seatSlot={(engineIdx) => getSlotForSeat(
+                        myEngineIndex >= 0 ? myEngineIndex : 0,
+                        engineIdx,
+                        $gameState!.seats.length
+                      )}
                     />
                   </div>
 

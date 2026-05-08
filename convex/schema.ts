@@ -72,6 +72,10 @@ export default defineSchema({
     currentTurn: v.number(),
     trickNum: v.number(),
     phase: v.string(),
+    lastCompletedTrick: v.optional(v.object({
+      plays: v.array(v.object({ playerIndex: v.number(), card: v.any() })),
+      winner: v.number(),
+    })),
   })
     .index("by_game", ["gameId"]),
 
