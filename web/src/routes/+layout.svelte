@@ -29,7 +29,7 @@
 
   :global(body) {
     font-family: system-ui, sans-serif;
-    background: #1a1a2e;
+    background: #00512C;
     color: #e0e0e0;
     min-height: 100vh;
   }

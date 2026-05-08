@@ -20,7 +20,7 @@
     const tone = SUIT_SKIN[suit] ?? '';
     if (rank === 'K')  return `🤴${tone}`;
     if (rank === 'Q')  return `👸${tone}`;
-    if (rank === 'Kn') return `🏇${tone}`;
+    if (rank === 'Kn') return `🐴`;
     if (rank === 'J')  return `💂${tone}`;
     return suit;
   }
@@ -147,7 +147,11 @@
     align-self: flex-end;
   }
   .cr-rank { font-size: 1rem; font-weight: 800; }
-  .cr-suit { font-size: 1rem; font-weight: 800;  }
+  .cr-suit { 
+    font-size: 1rem;
+    transform: scale(1.3);
+    font-weight: 800;  
+  }
 
   .card-center {
     text-align: center;
@@ -158,5 +162,9 @@
     align-items: center;
     justify-content: center;
     font-weight: 600;
+  }
+
+  .playing-card:not(.card-tarock) .card-center {
+    transform: scale(2);
   }
 </style>

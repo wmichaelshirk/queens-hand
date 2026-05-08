@@ -4,17 +4,35 @@
 
   interface Props {
     pile: StrawmanPileInfo;
+    playable?: boolean;
+    dimmed?: boolean;
+    onclick?: () => void;
   }
 
-  let { pile }: Props = $props();
+  let { pile, playable = false, dimmed = false, onclick }: Props = $props();
+
+  const MAX_SHOWN = 6;
+  const V = 4;  // px per level vertically
+  const H = 2;  // px per level horizontally
 </script>
 
 <div class="straw-pile" class:empty={!pile.topCard}>
   {#if pile.topCard}
-    <PlayingCard card={pile.topCard} size="straw" />
-    {#if pile.depth > 0}
-      <div class="straw-depth">+{pile.depth}</div>
-    {/if}
+    {@const shown = Math.min(pile.depth, MAX_SHOWN)}
+    <div class="pile-stack" style="--depth: {shown}">
+      {#each Array(shown) as _, i}
+        {@const idx = i + 1}
+        <div
+          class="pile-back"
+          style="--i: {idx}; left: {(shown - idx) * H}px"
+        >
+          <PlayingCard size="straw" />
+        </div>
+      {/each}
+      <div class="pile-face" style="left: {shown * H}px">
+        <PlayingCard card={pile.topCard} size="straw" {playable} {dimmed} {onclick} />
+      </div>
+    </div>
   {:else}
     <div class="straw-empty">—</div>
   {/if}
@@ -24,14 +42,28 @@
   .straw-pile {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 0.25rem;
+    align-items: flex-start;
   }
 
-  .straw-depth {
-    font-size: 0.68rem;
-    color: #666;
-    letter-spacing: 0.04em;
+  /* container grows right and down to fit the offset stack */
+  .pile-stack {
+    position: relative;
+    width: calc(65px + var(--depth) * 2px);
+    height: calc(91px + var(--depth) * 4px);
+  }
+
+  /* face card: top of the stack, most offset up-right */
+  .pile-face {
+    position: absolute;
+    top: 0;
+    z-index: 10;
+  }
+
+  /* each back: --i steps down (V px) and left (H px) from the face card */
+  .pile-back {
+    position: absolute;
+    top: calc(var(--i) * 4px);
+    z-index: calc(10 - var(--i));
   }
 
   .straw-empty {

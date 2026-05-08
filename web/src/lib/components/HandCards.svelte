@@ -12,10 +12,9 @@
 
   let { cards, legalMoves, isMyTurn, busy, onplay }: Props = $props();
 
-  const SUIT_ORDER: Record<string, number> = { T: 0, "♣": 1, "♦": 2, "♥": 3, "♠": 4 };
+  const SUIT_ORDER: Record<string, number> = { T: 0, "♣": 1, "♦": 2,  "♠": 3, "♥": 4 };
   const RANK_ORDER: Record<string, number> = {
-    "7": 0, "8": 1, "9": 2, "10": 3, J: 4, Q: 5, K: 6, A: 7,
-    Kn: 8,
+    "7": 0, "8": 1, "9": 2, "10": 3, J: 4, Kn: 5, Q: 6, K: 7, A: 8,
     I: 0, II: 1, III: 2, IV: 3, V: 4, VI: 5, VII: 6, VIII: 7, IX: 8, X: 9,
     XI: 10, XII: 11, XIII: 12, XIV: 13, XV: 14, XVI: 15, XVII: 16, XVIII: 17,
     XIX: 18, XX: 19, XXI: 20, "★": 21,

@@ -143,6 +143,13 @@ Convex reactive queries push state to clients automatically.
 - [x] Cards styled as proper playing cards (white/cream background, corner rank+suit, color-coded)
 - [x] Opponents' card backs shown as face-down overlapping card stack
 
+### 2.13 CSS theme variables
+- [ ] Extract hardcoded hex colours across all Svelte components into CSS custom
+      properties on `:root` (e.g. `--color-bg`, `--color-accent`, `--color-danger`,
+      `--color-card-face`, `--color-card-back`, etc.)
+- [ ] Centralise in `web/src/app.css` or a dedicated `theme.css` so colours can be
+      changed in one place; components reference variables instead of raw hex codes
+
 ### 2.3 Event-driven UI
 - [ ] Animate `CARD_PLAYED` → card slides from hand to trick area
 - [ ] Animate `TRICK_WON` → trick slides toward winner
@@ -160,14 +167,36 @@ Convex reactive queries push state to clients automatically.
 - [x] Color-coded: penalty (red) vs gain (green), game-type-aware
 - [x] Strohmandeln: shown prominently during between-hands voting phase
 
+### 2.10 Detailed per-hand breakdown
+- [ ] Expand `lastHandSummary` to include trick-level detail, not just score deltas
+- [ ] Slobberhannes: list which penalty events fired (Q♣ taken by X, 7♦ taken by Y,
+      last-trick penalty for Z, sweep bonus for W) with the player name for each
+- [ ] Strohmandeln: show bid vs. actual tricks taken; which strawman piles contributed;
+      whether scoring threshold was reached
+- [ ] UI: expandable "show details" within the hand summary panel — collapsed by default,
+      one click reveals the trick-by-trick breakdown
+
 ### 2.6 Rules reference ✓
 - [x] Collapsible rules accordion on the waiting room page for both games
 - [x] Slobberhannes: penalty scoring rules, sweep bonus, suit-following
 - [x] Strohmandeln: deck, strawman piles, bidding, scoring, session length
 
+### 2.11 Rules accessible during active gameplay
+- [ ] Add collapsible rules section to the active game table page (below the fold),
+      so players can consult the rules mid-game without navigating away
+- [ ] Same accordion content as waiting room; collapsed by default so it doesn't
+      clutter the play area; game-type-aware (shows only the relevant game's rules)
+
 ### 2.7 Game identity ✓
 - [x] Game icons (Q♣ for Slobberhannes, ★ for Strohmandeln) in table header and waiting room title
 - [x] Icons also shown in lobby table cards and game picker buttons
+
+### 2.12 Proper game avatars / icons
+- [ ] Replace text-symbol placeholders (Q♣, ★) with proper SVG icons or styled card art
+- [ ] Slobberhannes: a rendered Queen of Clubs card (or stylised version) as the game badge
+- [ ] Strohmandeln: a styled straw/star icon or stylised card fan to represent the game
+- [ ] Use consistently everywhere the game type is displayed: game picker, lobby cards,
+      table header, waiting room title, game-over screen
 
 ### 2.8 Game over screen ✓
 - [x] Proper game-over display with final scores and loser highlight

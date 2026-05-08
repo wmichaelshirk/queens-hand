@@ -347,7 +347,7 @@
       <button class="back-btn" onclick={leaveTable}>← Lobby</button>
       {#if $tableData}
         <span class="game-icon" aria-hidden="true">
-          {#if $tableData.gameType === "slobberhannes"}Q♣{:else}★{/if}
+          {#if $tableData.gameType === "slobberhannes"}Q♣{:else}👨🏻‍🌾{/if}
         </span>
         <span class="table-title">{GAME_NAMES[$tableData.gameType]}</span>
         <span class="status-badge" class:live={$tableData.status === "active"}>
@@ -646,7 +646,18 @@
                 <div class="strawmen-label">Your piles</div>
                 <div class="strawmen-piles">
                   {#each myPiles as pile, i (i)}
-                    <Pile {pile} />
+                    {@const topCard = pile.topCard}
+                    {@const pilePlayable = isMyTurn && !!topCard && ($gameState?.legalMoves ?? []).some(
+                      m => m.type === 'PLAY_CARD' && m.card.suit === topCard.suit && m.card.rank === topCard.rank
+                    )}
+                    <Pile
+                      {pile}
+                      playable={pilePlayable}
+                      dimmed={isMyTurn && !pilePlayable}
+                      onclick={pilePlayable && !busy && topCard
+                        ? () => playMove({ type: 'PLAY_CARD', card: topCard })
+                        : undefined}
+                    />
                   {/each}
                 </div>
               </div>
