@@ -1,13 +1,26 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { handleCallback } from "$lib/convex";
+  import { replaceState } from "$app/navigation";
+  import { handleCallback, authResolving } from "$lib/convex";
   import favicon from "$lib/assets/favicon.svg";
 
   let { children } = $props();
 
-  onMount(() => {
-    // Exchange OAuth/magic-link code if present in the URL
-    handleCallback();
+  onMount(async () => {
+    const hadCode = new URLSearchParams(window.location.search).has("code");
+    if (hadCode) authResolving.set(true);
+    let err: string | null = null;
+    try {
+      err = await handleCallback();
+    } finally {
+      authResolving.set(false);
+    }
+    if (hadCode) {
+      const clean = new URL(window.location.href);
+      clean.searchParams.delete("code");
+      replaceState(clean.toString(), {});
+    }
+    if (err) sessionStorage.setItem("auth_error", err);
   });
 </script>
 

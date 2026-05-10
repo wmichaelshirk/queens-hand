@@ -14,7 +14,7 @@
  *   6. Tokens stored in localStorage; access token passed to ConvexClient.setAuth.
  */
 
-import { ConvexClient } from "convex/browser";
+import { ConvexClient, ConvexHttpClient } from "convex/browser";
 import { writable, derived, get } from "svelte/store";
 import { PUBLIC_CONVEX_URL } from "$env/static/public";
 
@@ -32,6 +32,10 @@ const _accessToken = writable<string | null>(
 );
 
 export const isAuthenticated = derived(_accessToken, (t) => t !== null);
+
+// Set to true only once Convex confirms the token is valid on the server side.
+// This is the right signal to use for calling ensurePlayer.
+export const convexAuthenticated = writable(false);
 
 // ── Guest session ─────────────────────────────────────────────────────────────
 
@@ -60,13 +64,45 @@ export const isLoggedIn = derived(
   ([auth, guest]) => auth || guest !== null
 );
 
+// True while a magic-link code is being exchanged — auth guard must not redirect during this window.
+export const authResolving = writable(false);
+
 // ── Convex client ─────────────────────────────────────────────────────────────
 
 export const convex = new ConvexClient(PUBLIC_CONVEX_URL);
 
 // Wire the token into the Convex client.
+//
+// Calling setAuth(async () => null) on an already-unauthenticated client causes
+// Convex to call tryRestartSocket() internally, which drops any in-flight action
+// (like the auth:signIn code-exchange action). Skip the first notification if the
+// initial value is null — the client is already unauthenticated by default.
+let _authWired = false;
+
 _accessToken.subscribe((token) => {
-  convex.setAuth(async () => token, () => { _accessToken.set(null); });
+  if (!_authWired && token === null) {
+    // Initial unauthenticated state — Convex client already starts unauthenticated.
+    // Calling setAuth here would restart the socket and kill in-flight actions.
+    _authWired = true;
+    convexAuthenticated.set(false);
+    return;
+  }
+  _authWired = true;
+
+  if (token === null) {
+    // Token was cleared after being set (sign-out or server rejection).
+    // Clear auth on the Convex client with a no-op callback.
+    convexAuthenticated.set(false);
+    convex.setAuth(async () => null, () => {});
+    return;
+  }
+
+  convex.setAuth(async () => token, (serverConfirmed) => {
+    convexAuthenticated.set(serverConfirmed);
+    if (!serverConfirmed && get(_accessToken) === token) {
+      _accessToken.set(null);
+    }
+  });
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -125,28 +161,34 @@ export async function signIn(
  * Exchange the ?code= query param from an OAuth / magic-link callback.
  * Call this once on page load from +layout.svelte.
  */
-export async function handleCallback(): Promise<void> {
+export async function handleCallback(): Promise<string | null> {
   const params = new URLSearchParams(window.location.search);
   const code = params.get("code");
-  if (!code) return;
+  if (!code) return null;
 
   const verifier = localStorage.getItem(VERIFIER_KEY) ?? undefined;
   localStorage.removeItem(VERIFIER_KEY);
 
-  const result: any = await convex.action("auth:signIn" as any, {
-    provider: undefined,
-    params: { code },
-    verifier,
-  });
+  // Use an HTTP client for this unauthenticated one-shot call.
+  // The WebSocket client (convex) restarts its socket during the initial auth
+  // handshake, which drops any in-flight WebSocket actions.
+  const http = new ConvexHttpClient(PUBLIC_CONVEX_URL);
+  try {
+    const result: any = await http.action("auth:signIn" as any, {
+      provider: undefined,
+      params: { code },
+      verifier,
+    });
 
-  if (result?.tokens) {
-    storeTokens(result.tokens);
+    if (result?.tokens) {
+      storeTokens(result.tokens);
+      return null;
+    } else {
+      return "Sign-in link was already used or has expired. Request a new one.";
+    }
+  } catch (e: any) {
+    return e?.message ?? "Sign-in failed. Please try again.";
   }
-
-  // Remove code from URL without reloading
-  const clean = new URL(window.location.href);
-  clean.searchParams.delete("code");
-  window.history.replaceState({}, "", clean.toString());
 }
 
 export async function signInAsGuest(displayName: string): Promise<void> {

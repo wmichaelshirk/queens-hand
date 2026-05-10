@@ -26,8 +26,39 @@ input handling, hand summary panel, rules reference accordion, game identity ico
 game-over screen.
 
 ### 2.1 Auth — Google login + magic link
-- [ ] Implement Login with Google and magic link. Both should store the user under
-      the same email address; either should subsequently work for the same person.
+- [x] Magic link (Resend) — fully working; three-layer fix: `authResolving` guard blocks
+      lobby redirect during code exchange; `_authWired` flag skips initial `setAuth(null)`
+      (avoids spurious WebSocket restart); `ConvexHttpClient` used for the code-exchange
+      action (bypasses WebSocket, which reconnects at ~0.8s and drops in-flight actions)
+- [ ] Login with Google — button exists (disabled); needs AUTH_GOOGLE_ID + AUTH_GOOGLE_SECRET
+      from Google Cloud Console; both providers must store under the same email address
+
+### 2.2 User profile dropdown
+
+Replace the inline username / edit / sign-out row in the header with a dropdown menu.
+
+#### a) Dropdown shell
+- [ ] Header: clicking the player's name/avatar opens a dropdown panel; clicking
+      outside or pressing Escape closes it
+- [ ] Dropdown contains: avatar + display name (read-only summary), "Edit profile"
+      item, "Sign out" item, and a placeholder section for future History / Stats items
+
+#### b) Display name editing
+- [ ] Move the existing inline name-edit flow into the dropdown's "Edit profile" panel
+- [ ] Persist the chosen name to the `players` document via `auth:updateDisplayName`
+      (already implemented); guest display names are session-local only
+
+#### c) Avatar selection and persistence
+- [ ] Add an `avatar` field (string — emoji or `"google"` sentinel) to the `players`
+      document in `convex/schema.ts`; default to a deterministic fallback if absent
+- [ ] "Edit profile" panel: avatar picker grid — rows for category, emoji options per row:
+      - People: 👨 👩 🧓 👴 🧔 🧑
+      - Animals: 🦊 🐺 🐻 🦁 🐯 🐸 🐧 🦄
+      - For Google-authenticated users: an additional "Use Google photo" option that
+        stores `"google"` and renders their profile picture URL from the identity
+- [ ] Avatar is shown in: header dropdown trigger, lobby player list, table seat tokens,
+      game-over screen
+- [ ] Guests can pick an avatar for the session (not persisted across sessions)
 
 ### 2.3 Event-driven UI
 - [ ] Animate `CARD_PLAYED` → card slides from hand to trick area

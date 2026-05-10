@@ -3,19 +3,21 @@
   import { browser } from "$app/environment";
   import {
     isAuthenticated, isLoggedIn, guestSession,
-    signOut, convex, watchQuery,
+    signOut, convex, watchQuery, convexAuthenticated, authResolving,
   } from "$lib/convex";
 
   // ── Auth guard ────────────────────────────────────────────────────────────────
 
   $effect(() => {
-    if (browser && !$isLoggedIn) goto("/login");
+    if (browser && !$isLoggedIn && !$authResolving) {
+      goto("/login");
+    }
   });
 
   // ── Player record ─────────────────────────────────────────────────────────────
 
   $effect(() => {
-    if ($isAuthenticated) {
+    if ($convexAuthenticated) {
       convex.mutation("auth:ensurePlayer" as any, {}).catch(() => {});
     }
   });
