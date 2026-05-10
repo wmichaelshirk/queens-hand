@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { browser } from "$app/environment";
   import { isLoggedIn, signIn, signInAsGuest } from "$lib/convex";
@@ -9,6 +10,11 @@
 
   let guestName = $state("");
   let guestError = $state("");
+
+  onMount(() => {
+    const err = sessionStorage.getItem("auth_error");
+    if (err) { authError = err; sessionStorage.removeItem("auth_error"); }
+  });
 
   // Redirect if already logged in
   $effect(() => {
@@ -47,7 +53,7 @@
       <p class="error">{authError}</p>
     {/if}
 
-    <button class="btn google" onclick={loginWithGoogle}>
+    <button disabled={true} class="btn google" onclick={loginWithGoogle}>
       <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
         <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.616z"/>
         <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/>

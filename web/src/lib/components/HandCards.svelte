@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Card, Move } from '$lib/gameTypes';
-  import { slobberhannesSort } from '$lib/cardSort';
+  import { whistSort } from '$lib/cardSort';
   import PlayingCard from './PlayingCard.svelte';
 
   interface Props {
@@ -12,7 +12,7 @@
     sortFn?: (a: Card, b: Card) => number;
   }
 
-  let { cards, legalMoves, isMyTurn, busy, onplay, sortFn = slobberhannesSort }: Props = $props();
+  let { cards, legalMoves, isMyTurn, busy, onplay, sortFn = whistSort }: Props = $props();
 
   function sortHand(hand: Card[]): Card[] {
     return [...hand].sort(sortFn);

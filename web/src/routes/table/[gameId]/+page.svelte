@@ -10,10 +10,11 @@
   import type { Card, Move, StrawmanPileInfo } from "$lib/gameTypes";
   import PlayingCard from "$lib/components/PlayingCard.svelte";
   import HandCards from "$lib/components/HandCards.svelte";
-  import { slobberhannesSort, strohmandelnSort } from "$lib/cardSort";
+  import { whistSort, tarockSort } from "$lib/cardSort";
   import Trick from "$lib/components/Trick.svelte";
   import Pile from "$lib/components/Pile.svelte";
   import PlayerToken from "$lib/components/PlayerToken.svelte";
+  import HandResultModal from "$lib/components/HandResultModal.svelte";
   import { getSlotForSeat } from "$lib/tableLayout";
 
   const gameId = $derived($page.params.gameId);
@@ -151,6 +152,9 @@
     deltas: { player: number; delta: number; reason: string }[];
     runningTotals: number[];
     seatNames: string[];
+    breakdown: { player: number; role: string | null; items: { label: string; delta: number }[]; total: number }[] | null;
+    gameTarget: number | null;
+    losers: number[] | null;
   };
 
   type GameState = {
@@ -207,10 +211,22 @@
   const rightSeats    = $derived(seatSlots.filter(s => s.slot === 'right'));
   const myBottomSeat  = $derived(seatSlots.find(s => s.slot === 'bottom'));
 
-  let showHandSummary = $state(true);
+  let showHandSummary = $state(false);
+  let lastShownSummaryKey = $state<string | null>(null);
+
   $effect(() => {
-    // Auto-show summary whenever it updates
-    if ($gameState?.lastHandSummary) showHandSummary = true;
+    const gs = $gameState;
+    if (!gs) return;
+    // Only re-show for a summary we haven't already shown/dismissed.
+    // Comparing content prevents re-triggering on every reactive update mid-hand.
+    if (gs.lastHandSummary) {
+      const key = JSON.stringify(gs.lastHandSummary.deltas) + '|' + gs.lastHandSummary.runningTotals.join(',');
+      if (key !== lastShownSummaryKey) {
+        lastShownSummaryKey = key;
+        showHandSummary = true;
+      }
+    }
+    if (gs.continuation) showHandSummary = true;
   });
 
   function moveLabel(move: Move): string {
@@ -538,67 +554,30 @@
 
         </div>
 
-      {:else if $tableData.status === "active" || $tableData.status === "between_hands"}
+      {:else if $tableData.status === "active" || $tableData.status === "between_hands" || $tableData.status === "finished"}
         <div class="game-active">
           {#if $gameState}
-            <!-- Last hand summary (both games) -->
-            {#if $gameState.lastHandSummary && showHandSummary}
-              {@const hs = $gameState.lastHandSummary}
-              <div class="hand-summary">
-                <div class="summary-header">
-                  <span class="summary-title">Last hand</span>
-                  <button class="summary-dismiss" onclick={() => showHandSummary = false}>✕</button>
-                </div>
-                <div class="summary-rows">
-                  {#each hs.deltas as d (d.player)}
-                    {@const isBad = $gameState?.gameType === 'slobberhannes' ? d.delta > 0 : d.delta < 0}
-                    {@const isGood = $gameState?.gameType === 'slobberhannes' ? d.delta < 0 : d.delta > 0}
-                    <div class="summary-row" class:summary-penalty={isBad} class:summary-bonus={isGood}>
-                      <span class="summary-name">{hs.seatNames[d.player] ?? `Player ${d.player + 1}`}</span>
-                      <span class="summary-reason">{d.reason}</span>
-                      <span class="summary-delta">{d.delta > 0 ? '+' : ''}{d.delta}</span>
-                    </div>
-                  {/each}
-                </div>
-                <div class="summary-totals">
-                  {#each hs.runningTotals as total, i (i)}
-                    <span class="summary-total">{hs.seatNames[i] ?? `P${i + 1}`}: {total}</span>
-                  {/each}
-                </div>
-              </div>
+            <!-- Hand result modal (all games, all phases) -->
+            {#if showHandSummary && ($gameState.lastHandSummary || $gameState.continuation)}
+              {@const hs = $gameState.lastHandSummary ?? {
+                deltas: [],
+                runningTotals: $gameState.publicState.scores,
+                seatNames: $gameState.seats.map(s => s.displayName),
+                breakdown: null,
+                gameTarget: null,
+                losers: null,
+              }}
+              <HandResultModal
+                summary={hs}
+                continuation={$gameState.continuation}
+                phase={$gameState.publicState.phase}
+                {busy}
+                onDismiss={() => showHandSummary = false}
+                onVote={voteContinue}
+              />
             {/if}
 
-            <!-- Between-hands vote (Strohmandeln only) -->
-            {#if $gameState.continuation}
-              {@const cont = $gameState.continuation}
-              <div class="vote-section">
-                <div class="vote-prompt">Hand complete — play another?</div>
-                <div class="vote-grid">
-                  {#each $gameState.seats as seat (seat.seatIndex)}
-                    {@const v = cont.votes[String(seat.enginePlayerIndex)]}
-                    <div class="vote-chip" class:voted={!!v} class:voted-continue={v === 'continue'} class:voted-quit={v === 'quit'}>
-                      <span class="vote-name">{seat.displayName}{seat.isBot ? " 🤖" : ""}</span>
-                      <span class="vote-val">
-                        {v === 'continue' ? '✓ Continue' : v === 'quit' ? '✗ Quit' : '…'}
-                      </span>
-                    </div>
-                  {/each}
-                </div>
-                {#if !cont.myVote}
-                  <div class="vote-actions">
-                    <button class="btn vote-continue-btn" onclick={() => voteContinue('continue')} disabled={busy}>
-                      Continue
-                    </button>
-                    <button class="btn vote-quit-btn" onclick={() => voteContinue('quit')} disabled={busy}>
-                      Quit
-                    </button>
-                  </div>
-                {:else}
-                  <p class="muted centered">Waiting for other players…</p>
-                {/if}
-              </div>
-            {:else}
-              <!-- Three-row table layout -->
+            <!-- Three-row table layout -->
               <div class="table-layout">
 
                 <!-- Row 1: top players (0–3), horizontal -->
@@ -722,13 +701,12 @@
                       isMyTurn={isMyTurn}
                       {busy}
                       onplay={(card) => playMove({ type: 'PLAY_CARD', card })}
-                      sortFn={$tableData.gameType === 'strohmandeln' ? strohmandelnSort : slobberhannesSort}
+                      sortFn={$tableData.gameType === 'strohmandeln' ? tarockSort : whistSort}
                     />
                   {/if}
                 </div>
 
               </div>
-            {/if}
 
           {:else}
             <p class="muted centered">Loading game…</p>
@@ -1305,75 +1283,6 @@
   }
 
 
-  /* ── Between-hands vote (Strohmandeln) ───────────────────────────────────── */
-  .vote-section {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-    align-items: center;
-    padding: 1.25rem;
-    background: #12192e;
-    border: 1px solid #1a4a80;
-    border-radius: 10px;
-  }
-
-  .vote-prompt {
-    font-size: 0.95rem;
-    font-weight: 600;
-    color: #ccc;
-    text-align: center;
-  }
-
-  .vote-grid {
-    display: flex;
-    gap: 0.75rem;
-    justify-content: center;
-    flex-wrap: wrap;
-  }
-
-  .vote-chip {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.2rem;
-    background: #16213e;
-    border: 1px solid #0f3460;
-    border-radius: 8px;
-    padding: 0.5rem 0.9rem;
-    min-width: 80px;
-  }
-
-  .vote-chip.voted-continue { border-color: #4caf50; background: #0f2a1f; }
-  .vote-chip.voted-quit     { border-color: #e94560; background: #1e1020; }
-
-  .vote-name { font-size: 0.75rem; color: #888; }
-  .vote-val  { font-size: 0.88rem; font-weight: 600; color: #ccc; }
-  .vote-chip.voted-continue .vote-val { color: #4caf50; }
-  .vote-chip.voted-quit .vote-val     { color: #e94560; }
-
-  .vote-actions {
-    display: flex;
-    gap: 0.75rem;
-  }
-
-  .vote-continue-btn {
-    background: #0f3a1f;
-    border-color: #4caf50;
-    color: #4caf50;
-    font-weight: 600;
-    padding: 0.55rem 1.5rem;
-  }
-  .vote-continue-btn:hover:not(:disabled) { background: #1a5a30; }
-
-  .vote-quit-btn {
-    background: #1e1020;
-    border-color: #e94560;
-    color: #e94560;
-    font-weight: 600;
-    padding: 0.55rem 1.5rem;
-  }
-  .vote-quit-btn:hover:not(:disabled) { background: #2a1030; }
-
   .move-section {
     display: flex;
     flex-direction: column;
@@ -1409,76 +1318,6 @@
   }
   .move-btn:hover:not(:disabled) { background: #1a5a90; border-color: #e94560; }
   .move-btn:disabled { opacity: 0.45; cursor: default; }
-
-  /* ── Hand summary ────────────────────────────────────────────────────────── */
-  .hand-summary {
-    background: #0d1e38;
-    border: 1px solid #1a4a80;
-    border-radius: 10px;
-    padding: 0.85rem 1rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.6rem;
-    width: 100%;
-    max-width: 480px;
-  }
-
-  .summary-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .summary-title {
-    font-size: 0.72rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: #666;
-  }
-
-  .summary-dismiss {
-    background: none;
-    border: none;
-    color: #555;
-    cursor: pointer;
-    font-size: 0.8rem;
-    padding: 0;
-    line-height: 1;
-  }
-  .summary-dismiss:hover { color: #999; }
-
-  .summary-rows {
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-  }
-
-  .summary-row {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    font-size: 0.85rem;
-  }
-
-  .summary-name  { font-weight: 600; color: #ccc; min-width: 80px; }
-  .summary-reason { color: #666; flex: 1; font-style: italic; font-size: 0.8rem; }
-  .summary-delta { font-weight: 700; font-size: 0.9rem; min-width: 32px; text-align: right; }
-
-  .summary-row.summary-penalty .summary-delta { color: #e94560; }
-  .summary-row.summary-bonus   .summary-delta { color: #4caf50; }
-  .summary-row:not(.summary-penalty):not(.summary-bonus) .summary-delta { color: #888; }
-
-  .summary-totals {
-    display: flex;
-    gap: 1rem;
-    flex-wrap: wrap;
-    border-top: 1px solid #1a3060;
-    padding-top: 0.5rem;
-    font-size: 0.8rem;
-    color: #888;
-  }
-
-  .summary-total { color: #aaa; }
 
   /* ── Sidebar ─────────────────────────────────────────────────────────────── */
   .sidebar {

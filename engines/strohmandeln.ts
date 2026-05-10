@@ -749,7 +749,59 @@ function computeScoreBreakdown(state: State): PlayerScoreBreakdown[] | null {
   if (state.declarer === null) {
     const p0pts = countCardPoints(state.capturedCards[0] ?? []);
     const p1pts = countCardPoints(state.capturedCards[1] ?? []);
-    if (p0pts === p1pts) return null;   // draw — nothing to show
+
+    if (p0pts === p1pts) {
+      // 35-35 draw: no score transfers, but bonuses that occurred are still informational
+      const bonusItems: Array<{ player: number; label: string }> = [];
+
+      // Pagat Ultimo (all scoring systems)
+      const pagatWinner = _birdWinnerAtPos(state.trickLog, 1);
+      if (pagatWinner !== null) bonusItems.push({ player: pagatWinner, label: 'Pagat Ultimo' });
+
+      if (state.scoring !== 'Beck') {
+        // Uhu, Kakadu (Furr + Mayr)
+        const uhuWinner    = _birdWinnerAtPos(state.trickLog, 2);
+        const kakaduWinner = _birdWinnerAtPos(state.trickLog, 3);
+        if (uhuWinner    !== null) bonusItems.push({ player: uhuWinner,    label: 'Uhu' });
+        if (kakaduWinner !== null) bonusItems.push({ player: kakaduWinner, label: 'Kakadu' });
+
+        // Quapil (Mayr only)
+        if (state.scoring === 'Mayr') {
+          const quapilWinner = _birdWinnerAtPos(state.trickLog, 4);
+          if (quapilWinner !== null) bonusItems.push({ player: quapilWinner, label: 'Quapil' });
+        }
+
+        // Mond Fang (Furr + Mayr)
+        for (const { plays, winner } of state.trickLog) {
+          const hasSküs = plays.some(p => p.card.suit === 'T' && p.card.rank === '★');
+          const hasMond  = plays.some(p => p.card.suit === 'T' && p.card.rank === 'XXI');
+          if (hasSküs && hasMond) { bonusItems.push({ player: winner, label: 'Mond Fang' }); break; }
+        }
+
+        // Trull / Royal Trull from captured cards (Furr + Mayr — Beck requires announcement)
+        const hasTrull = (cards: Card[]) => {
+          const ranks = new Set(cards.filter(c => c.suit === 'T').map(c => c.rank));
+          return ranks.has('★') && ranks.has('XXI') && ranks.has('I');
+        };
+        const hasRoyalTrull = (cards: Card[]) => cards.filter(c => c.rank === 'K').length >= 4;
+        for (let pi = 0; pi < 2; pi++) {
+          const cards = state.capturedCards[pi] ?? [];
+          if (hasTrull(cards))      bonusItems.push({ player: pi, label: 'Trull' });
+          if (hasRoyalTrull(cards)) bonusItems.push({ player: pi, label: 'Royal Trull' });
+        }
+      }
+
+      return [0, 1].map(pi => ({
+        player: pi,
+        role:   'none' as const,
+        items:  [
+          { label: 'game (draw)', delta: 0 },
+          ...bonusItems.filter(b => b.player === pi).map(b => ({ label: b.label, delta: 0 })),
+        ],
+        total:  0,
+      }));
+    }
+
     const winner = p0pts > p1pts ? 0 : 1;
     const delta  = SCORING_SYSTEMS[state.scoring].noDeclarerValue * state.handMultiplier;
     return [0, 1].map(pi => ({

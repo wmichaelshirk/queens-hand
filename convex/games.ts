@@ -55,6 +55,13 @@ async function resolvePlayerForQuery(ctx: QueryCtx, guestUserId: string | undefi
 
 type GameType = "slobberhannes" | "strohmandeln";
 
+type NormalizedPlayerBreakdown = {
+  player: number;
+  role:   string | null;  // 'declarer' | 'defender' | 'none' | null
+  items:  { label: string; delta: number }[];
+  total:  number;
+};
+
 interface EngineAdapter {
   start(config: { seats: number; scores: number[] | null; firstPlayer: number; settings: Record<string, unknown> }): { state: any; events: BareEvent[] };
   getLegalMoves(state: any): Move[];
@@ -66,6 +73,7 @@ interface EngineAdapter {
   reDeal(state: any, settings: Record<string, unknown>): { state: any; events: BareEvent[] };
   chooseBotMove(state: any, playerIndex: number): Move;
   getHands(state: any): Card[][];
+  getHandBreakdown(state: any): NormalizedPlayerBreakdown[] | null;
 }
 
 const slobberAdapter: EngineAdapter = {
@@ -106,6 +114,17 @@ const slobberAdapter: EngineAdapter = {
     return { type: "PLAY_CARD", card };
   },
   getHands(state) { return state.hands as Card[][]; },
+  getHandBreakdown(state) {
+    const breakdown = Slobberhannes.getHandBreakdown(state as Slobberhannes.State);
+    // Penalties are negated so delta < 0 means "bad" consistently across all engines.
+    // (A player who took first trick + QoC shows total: -2, each item at delta: -1.)
+    return breakdown.map(b => ({
+      player: b.player,
+      role:   null,
+      items:  b.items.map(label => ({ label, delta: -1 })),
+      total:  -b.total,
+    }));
+  },
 };
 
 const strahAdapter: EngineAdapter = {
@@ -142,6 +161,16 @@ const strahAdapter: EngineAdapter = {
     }) as Move;
   },
   getHands(state) { return state.hands as Card[][]; },
+  getHandBreakdown(state) {
+    const breakdown = Strohmandeln.computeScoreBreakdown(state as Strohmandeln.State);
+    if (!breakdown) return null;
+    return breakdown.map(b => ({
+      player: b.player,
+      role:   b.role,
+      items:  b.items,
+      total:  b.total,
+    }));
+  },
 };
 
 function getAdapter(gameType: GameType): EngineAdapter {
@@ -410,7 +439,11 @@ export const getMyGameState = query({
   handler: async (ctx, { gameId, guestUserId }) => {
     const game = await ctx.db.get(gameId);
     if (!game) return null;
-    if (game.status !== "active" && game.status !== "between_hands") return null;
+    if (
+      game.status !== "active" &&
+      game.status !== "between_hands" &&
+      game.status !== "finished"
+    ) return null;
 
     const allSeats = await ctx.db
       .query("game_seats")
@@ -445,6 +478,34 @@ export const getMyGameState = query({
       ? seats.find((s) => s.playerId === (caller._id as string))
       : null;
 
+    // ── Finished phase: return game-over state for modal ─────────────────────────
+    if (game.status === "finished") {
+      return {
+        publicState: {
+          currentTrick: [] as any[],
+          scores: (game.lastHandSummary as any)?.runningTotals ?? [],
+          currentTurn: -1,
+          trickNum: 0,
+          phase: "game_over",
+          lastCompletedTrick: null as { plays: { playerIndex: number; card: any }[]; winner: number } | null,
+        },
+        myHand: [] as Card[],
+        legalMoves: [] as Move[],
+        seats,
+        gameType: game.gameType,
+        strawmen: null,
+        continuation: null,
+        lastHandSummary: (game.lastHandSummary ?? null) as {
+          deltas: { player: number; delta: number; reason: string }[];
+          runningTotals: number[];
+          seatNames: string[];
+          breakdown: NormalizedPlayerBreakdown[] | null;
+          gameTarget: number | null;
+          losers: number[] | null;
+        } | null,
+      };
+    }
+
     // ── Between-hands phase: return vote state only ────────────────────────────
     if (game.status === "between_hands") {
       const cd = (game.result ?? {}) as {
@@ -474,6 +535,9 @@ export const getMyGameState = query({
           deltas: { player: number; delta: number; reason: string }[];
           runningTotals: number[];
           seatNames: string[];
+          breakdown: NormalizedPlayerBreakdown[] | null;
+          gameTarget: number | null;
+          losers: number[] | null;
         } | null,
       };
     }
@@ -544,6 +608,9 @@ export const getMyGameState = query({
         deltas: { player: number; delta: number; reason: string }[];
         runningTotals: number[];
         seatNames: string[];
+        breakdown: NormalizedPlayerBreakdown[] | null;
+        gameTarget: number | null;
+        losers: number[] | null;
       } | null,
     };
   },
@@ -936,12 +1003,18 @@ async function _applyMoveLogic(
   const handScoredEvent = events.find((e) => e.type === "HAND_SCORED") as
     | { type: "HAND_SCORED"; deltas: { player: number; delta: number; reason: string }[]; runningTotals: number[] }
     | undefined;
+  const gameOverEvent = events.find((e) => e.type === "GAME_OVER") as
+    | { type: "GAME_OVER"; finalScores: number[]; losers?: number[] }
+    | undefined;
   if (handScoredEvent) {
     await ctx.db.patch(gameId, {
       lastHandSummary: {
         deltas: handScoredEvent.deltas,
         runningTotals: handScoredEvent.runningTotals,
         seatNames,
+        breakdown: adapter.getHandBreakdown(nextState),
+        gameTarget: (nextState as any).loseAt ?? null,
+        losers: gameOverEvent?.losers ?? null,
       },
     });
   }
