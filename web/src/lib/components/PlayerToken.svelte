@@ -3,19 +3,20 @@
   import { isVerticalSlot } from '$lib/tableLayout';
   import type { SlotName } from '$lib/tableLayout';
 
-  let { name, isBot, cardCount, slot, score, isCurrentTurn = false }: {
+  let { name, isBot, cardCount, slot, score, isCurrentTurn = false, isDealer = false }: {
     name: string;
     isBot: boolean;
     cardCount: number;
     slot: SlotName;
     score?: number;
     isCurrentTurn?: boolean;
+    isDealer?: boolean;
   } = $props();
 
   const vertical = $derived(isVerticalSlot(slot));
 </script>
 
-<div class="player-token" class:current-turn={isCurrentTurn} class:vertical>
+<div class="player-token" class:current-turn={isCurrentTurn} class:is-dealer={isDealer} class:vertical>
 
   {#if slot === 'left'}
     <!-- Info on the outside-left, rotated -90° (reads bottom→top) -->
@@ -24,6 +25,7 @@
         <div class="avatar">{isBot ? ' 🤖' : '?'}</div>
         <span class="token-name">{name}</span>
         {#if score !== undefined}<span class="token-score">{score}</span>{/if}
+        {#if isDealer}<span class="dealer-chip">D</span>{/if}
       </div>
     </div>
     <div class="card-stack vert left-stack" style="--n: {cardCount}">
@@ -48,6 +50,7 @@
         <div class="avatar">{isBot ? ' 🤖' : '?'}</div>
         <span class="token-name">{name}</span>
         {#if score !== undefined}<span class="token-score">{score}</span>{/if}
+        {#if isDealer}<span class="dealer-chip">D</span>{/if}
       </div>
     </div>
 
@@ -57,6 +60,7 @@
       <div class="avatar">?</div>
       <span class="token-name">{name}{isBot ? ' 🤖' : ''}</span>
       {#if score !== undefined}<span class="token-score">{score}</span>{/if}
+      {#if isDealer}<span class="dealer-chip">D</span>{/if}
     </div>
 
   {:else}
@@ -65,6 +69,7 @@
       <div class="avatar">{isBot ? ' 🤖' : '?'}</div>
       <span class="token-name">{name}</span>
       {#if score !== undefined}<span class="token-score">{score}</span>{/if}
+      {#if isDealer}<span class="dealer-chip">D</span>{/if}
     </div>
     <div class="card-stack horiz" style="--n: {cardCount}">
       {#if cardCount === 0}
@@ -108,6 +113,18 @@
   .current-turn .token-info {
     border-color: #e94560;
     background: #1e0a14;
+  }
+
+  .dealer-chip {
+    font-size: 0.6rem;
+    font-weight: 700;
+    color: #0a1a2e;
+    background: #7eb8e0;
+    border-radius: 3px;
+    padding: 0.05rem 0.3rem;
+    line-height: 1.4;
+    letter-spacing: 0.05em;
+    flex-shrink: 0;
   }
 
   /* Narrow wrapper so rotated info takes minimal layout space */

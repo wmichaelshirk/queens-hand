@@ -135,6 +135,7 @@
     currentTrick: { playerIndex: number; card: { suit: string; rank: string } }[];
     scores: number[];
     currentTurn: number;
+    dealer: number;
     trickNum: number;
     phase: string;
     lastCompletedTrick: { plays: { playerIndex: number; card: { suit: string; rank: string } }[]; winner: number } | null;
@@ -683,6 +684,7 @@
                           slot={seat.slot}
                           score={$gameState.publicState.scores[seat.enginePlayerIndex] ?? 0}
                           isCurrentTurn={seat.enginePlayerIndex === $gameState.publicState.currentTurn}
+                          isDealer={seat.enginePlayerIndex === $gameState.publicState.dealer}
                         />
                       </div>
                     {/each}
@@ -701,6 +703,7 @@
                           slot="left"
                           score={$gameState.publicState.scores[seat.enginePlayerIndex] ?? 0}
                           isCurrentTurn={seat.enginePlayerIndex === $gameState.publicState.currentTurn}
+                          isDealer={seat.enginePlayerIndex === $gameState.publicState.dealer}
                         />
                       </div>
                     {/each}
@@ -739,6 +742,7 @@
                           slot="right"
                           score={$gameState.publicState.scores[seat.enginePlayerIndex] ?? 0}
                           isCurrentTurn={seat.enginePlayerIndex === $gameState.publicState.currentTurn}
+                          isDealer={seat.enginePlayerIndex === $gameState.publicState.dealer}
                         />
                       </div>
                     {/each}
@@ -756,6 +760,7 @@
                         slot="bottom"
                         score={$gameState.publicState.scores[myBottomSeat.enginePlayerIndex] ?? 0}
                         isCurrentTurn={isMyTurn}
+                        isDealer={myBottomSeat.enginePlayerIndex === $gameState.publicState.dealer}
                       />
                     </div>
                   {/if}

@@ -77,6 +77,7 @@ export default defineSchema({
       winner: v.number(),
     })),
     recentEvents: v.optional(v.array(v.any())),
+    dealer: v.optional(v.number()),
   })
     .index("by_game", ["gameId"]),
 

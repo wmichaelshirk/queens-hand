@@ -30,7 +30,7 @@ function playGame() {
     if (state.phase === 'hand_over') {
       state = engine.dealState({
         scores:      state.scores,
-        firstLeader: state.leader,
+        dealerIndex: (state.dealer + 1) % PLAYER_COUNT,
         playerCount: PLAYER_COUNT,
         loseAt:      state.loseAt,
       });

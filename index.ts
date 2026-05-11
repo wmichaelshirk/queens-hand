@@ -78,7 +78,7 @@ async function runSlobberhannes(): Promise<void> {
     display.printScoreboard(playerNames, scores, engine.DEFAULT_LOSE_AT);
     await display.askContinue();
 
-    let state = engine.dealState({ scores, playerCount, firstLeader: handNum % playerCount });
+    let state = engine.dealState({ scores, playerCount, dealerIndex: handNum % playerCount });
     state = await playHand(state, playerNames);
 
     display.printHandSummary(playerNames, state);

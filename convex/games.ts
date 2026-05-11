@@ -67,6 +67,7 @@ interface EngineAdapter {
   getLegalMoves(state: any): Move[];
   applyMove(state: any, move: Move): { state: any; events: BareEvent[] };
   getCurrentPlayer(state: any): number;
+  getDealer(state: any): number;
   isHandOver(state: any): boolean;
   isGameOver(state: any): boolean;
   getGameResult(state: any): any;
@@ -80,7 +81,7 @@ const slobberAdapter: EngineAdapter = {
   start({ seats, scores, firstPlayer, settings: _settings }) {
     const state = Slobberhannes.dealState({
       scores: scores ?? null,
-      firstLeader: firstPlayer,
+      dealerIndex: firstPlayer,
       playerCount: seats,
     });
     return { state, events: [] };
@@ -96,13 +97,14 @@ const slobberAdapter: EngineAdapter = {
     return Slobberhannes.applyMove(state, move.card);
   },
   getCurrentPlayer(state) { return Slobberhannes.getCurrentPlayer(state); },
+  getDealer(state) { return (state as Slobberhannes.State).dealer; },
   isHandOver(state) { return Slobberhannes.isHandOver(state); },
   isGameOver(state) { return Slobberhannes.isGameOver(state); },
   getGameResult(state) { return Slobberhannes.getGameResult(state); },
   reDeal(state, _settings) {
     const newState = Slobberhannes.dealState({
       scores: state.scores,
-      firstLeader: (state.leader + 1) % state.playerCount,
+      dealerIndex: (state.dealer + 1) % state.playerCount,
       playerCount: state.playerCount,
     });
     return { state: newState, events: [] };
@@ -143,6 +145,7 @@ const strahAdapter: EngineAdapter = {
     return Strohmandeln.applyMove(state, move as any);
   },
   getCurrentPlayer(state) { return Strohmandeln.getCurrentPlayer(state); },
+  getDealer(state) { return (state as Strohmandeln.State).dealerIndex; },
   isHandOver(state) { return Strohmandeln.isHandOver(state); },
   isGameOver(state) { return Strohmandeln.isGameOver(state); },
   getGameResult(_state) { return null; },
@@ -240,7 +243,7 @@ async function _startGame(
   const { state, events } = adapter.start({
     seats: seats.length,
     scores: null as number[] | null,
-    firstPlayer: 0,
+    firstPlayer: Math.floor(Math.random() * seats.length),
     settings: game.settings,
   });
 
@@ -253,6 +256,7 @@ async function _startGame(
     currentTrick: state.currentTrick ?? [],
     scores: state.scores ?? [],
     currentTurn: currentPlayer,
+    dealer: adapter.getDealer(state),
     trickNum: state.trickNum ?? 0,
     phase: state.phase ?? "playing",
     recentEvents: startEvents,
@@ -487,6 +491,7 @@ export const getMyGameState = query({
           currentTrick: [] as any[],
           scores: (game.lastHandSummary as any)?.runningTotals ?? [],
           currentTurn: -1,
+          dealer: 0,
           trickNum: 0,
           phase: "game_over",
           lastCompletedTrick: null as { plays: { playerIndex: number; card: any }[]; winner: number } | null,
@@ -524,6 +529,7 @@ export const getMyGameState = query({
           currentTrick: [] as any[],
           scores: cd.scores ?? [],
           currentTurn: -1,
+          dealer: cd.nextDealerIndex ?? 0,
           trickNum: 0,
           phase: "hand_over",
           lastCompletedTrick: null as { plays: { playerIndex: number; card: any }[]; winner: number } | null,
@@ -598,6 +604,7 @@ export const getMyGameState = query({
         currentTrick: publicState.currentTrick,
         scores: publicState.scores,
         currentTurn: publicState.currentTurn,
+        dealer: publicState.dealer ?? 0,
         trickNum: publicState.trickNum,
         phase: publicState.phase,
         lastCompletedTrick: (publicState.lastCompletedTrick ?? null) as { plays: { playerIndex: number; card: any }[]; winner: number } | null,
@@ -1122,6 +1129,7 @@ async function _updatePublicAndHands(
       currentTrick: state.currentTrick ?? [],
       scores: state.scores ?? [],
       currentTurn: adapter.getCurrentPlayer(state),
+      dealer: adapter.getDealer(state),
       trickNum: state.trickNum ?? 0,
       phase: state.phase ?? "playing",
       ...(lastTrickPatch !== undefined ? { lastCompletedTrick: lastTrickPatch } : {}),
@@ -1312,6 +1320,7 @@ async function _startNextHand(
     currentTrick: newState.currentTrick ?? [],
     scores: newState.scores ?? [],
     currentTurn: currentPlayer,
+    dealer: newState.dealerIndex,
     trickNum: newState.trickNum ?? 0,
     phase: newState.phase ?? "bidding",
     recentEvents: handStartEvents,

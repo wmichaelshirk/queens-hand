@@ -72,6 +72,7 @@ export interface State {
   playerCount:   number;
   tricksPerHand: number;
   trickNum:      number;
+  dealer:        number;
   leader:        number;
   currentTrick:  Play[];
   trickLog:      TrickRecord[];
@@ -87,7 +88,7 @@ export interface GameResult {
 
 export interface DealConfig {
   scores?:      number[] | null;
-  firstLeader?: number;
+  dealerIndex?: number;
   loseAt?:      number;
   playerCount?: number;
 }
@@ -146,7 +147,7 @@ function _applySweepBonus(penalties: number[]): number[] {
 
 function dealState({
   scores = null,
-  firstLeader = 0,
+  dealerIndex = 0,
   loseAt = DEFAULT_LOSE_AT,
   playerCount = DEFAULT_PLAYER_COUNT,
 }: DealConfig = {}): State {
@@ -158,6 +159,7 @@ function dealState({
   const hands: Card[][] = Array.from({ length: playerCount }, (_, i) =>
     deck.slice(i * tricksPerHand, (i + 1) * tricksPerHand)
   );
+  const eldest = (dealerIndex + 1) % playerCount;
   return {
     hands,
     scores: scores ? [...scores] : Array<number>(playerCount).fill(0),
@@ -165,7 +167,8 @@ function dealState({
     playerCount,
     tricksPerHand,
     trickNum: 0,
-    leader: firstLeader,
+    dealer: dealerIndex,
+    leader: eldest,
     currentTrick: [],
     trickLog: [],
     phase: 'playing',
