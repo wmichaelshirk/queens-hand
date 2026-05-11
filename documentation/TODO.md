@@ -258,6 +258,12 @@ hands" without a structural change.
       `isScoreBad(gameType, delta)` instead of baking the sign convention into the
       hand summary template.
       (`web/src/routes/table/[gameId]/+page.svelte:554–555`)
+- [ ] Add `defaultSortFn` to `GAME_REGISTRY`; expose a sort-order toggle in the table
+      UI so users can override the default hand ordering. UI-only; no backend change.
+      Persist preference in `localStorage` keyed by game type.
+- [ ] Add `defaultDirection` (`'clockwise' | 'counterclockwise'`) to `GAME_REGISTRY`;
+      expose a direction toggle in the table UI. UI-only; controls seat-rotation and
+      play-order display. Persist preference in `localStorage`.
 
 ### 5.1 Generalize components before adding new games (see Pre-5.x above)
 ### 5.2 Bondtolva
