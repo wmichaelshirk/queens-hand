@@ -2,6 +2,8 @@ import type { Card, BareEvent, EngineResult } from '../types';
 import type { ISMCTSEngine } from '../lib/engine';
 import { bipartiteMatch } from '../lib/matching';
 
+export const GAME_NAME = "Slobberhannes";
+export const GAME_ICON = "Q♣";
 /*
  * SLOBBERHANNES — Rules as implemented
  * Source: McLeod, J. (pagat.com/tricks/slobber.html); Parlett, D. "The Penguin Book of Card Games."

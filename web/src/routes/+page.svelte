@@ -2,9 +2,10 @@
   import { goto } from "$app/navigation";
   import { browser } from "$app/environment";
   import {
-    isAuthenticated, isLoggedIn, guestSession,
+    isLoggedIn, guestSession,
     signOut, convex, watchQuery, convexAuthenticated, authResolving,
   } from "$lib/convex";
+  import { GAME_REGISTRY } from "$lib/gameConfig";
 
   // ── Auth guard ────────────────────────────────────────────────────────────────
 
@@ -106,11 +107,6 @@
 
   const activeTables = watchQuery<ActiveTable[]>("games:listActiveTables" as any, {});
 
-  const GAME_NAMES: Record<string, string> = {
-    slobberhannes: "Slobberhannes",
-    strohmandeln: "Strohmandeln",
-  };
-
   let newTableGameType = $state<"slobberhannes" | "strohmandeln">("slobberhannes");
   let creatingTable = $state(false);
 
@@ -206,16 +202,13 @@
       <div class="table-card create">
         <div class="card-title">New Table</div>
         <div class="game-picker">
-          <button
-            class="pick-btn"
-            class:selected={newTableGameType === "slobberhannes"}
-            onclick={() => newTableGameType = "slobberhannes"}
-          ><span class="pick-icon">Q♣</span> Slobberhannes</button>
-          <button
-            class="pick-btn"
-            class:selected={newTableGameType === "strohmandeln"}
-            onclick={() => newTableGameType = "strohmandeln"}
-          ><span class="pick-icon">★</span> Strohmandeln</button>
+          {#each Object.entries(GAME_REGISTRY) as [type, meta]}
+            <button
+              class="pick-btn"
+              class:selected={newTableGameType === type}
+              onclick={() => newTableGameType = type as typeof newTableGameType}
+            ><span class="pick-icon">{meta.icon}</span> {meta.name}</button>
+          {/each}
         </div>
         <div class="card-footer">
           <button class="btn accent-sm" onclick={createTable} disabled={creatingTable}>
@@ -231,8 +224,8 @@
           {@const isSeated = table.seats.some((s) => s.playerId === myId)}
           <div class="table-card">
             <div class="card-header">
-              <span class="game-icon-sm">{table.gameType === "slobberhannes" ? "Q♣" : "★"}</span>
-              <span class="card-title">{GAME_NAMES[table.gameType]}</span>
+              <span class="game-icon-sm">{GAME_REGISTRY[table.gameType]?.icon ?? ""}</span>
+              <span class="card-title">{GAME_REGISTRY[table.gameType]?.name ?? table.gameType}</span>
               <span class="status" class:live={table.status === "active"}>
                 {table.status === "active" ? "live" : "waiting"}
               </span>

@@ -7,9 +7,11 @@
     playable?: boolean;
     dimmed?: boolean;
     onclick?: () => void;
+    playerIndex?: number;
+    pileIndex?: number;
   }
 
-  let { pile, playable = false, dimmed = false, onclick }: Props = $props();
+  let { pile, playable = false, dimmed = false, onclick, playerIndex, pileIndex }: Props = $props();
 
   const MAX_SHOWN = 6;
   const V = 4;  // px per level vertically
@@ -29,7 +31,9 @@
           <PlayingCard size="straw" />
         </div>
       {/each}
-      <div class="pile-face" style="left: {shown * H}px">
+      <div class="pile-face" style="left: {shown * H}px"
+           data-pile-player={playerIndex}
+           data-pile-index={pileIndex}>
         <PlayingCard card={pile.topCard} size="straw" {playable} {dimmed} {onclick} />
       </div>
     </div>

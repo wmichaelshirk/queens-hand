@@ -47,6 +47,8 @@
     class:card-tarock={card?.suit === 'T'}
     class:trick-card={size === 'trick'}
     class:straw-card={size === 'straw'}
+    data-card-id={card ? `${card.suit}${card.rank}` : undefined}
+    data-flip-id={card ? `card-${card.suit}${card.rank}` : undefined}
     role="button"
     tabindex="0"
     {onclick}
@@ -63,6 +65,8 @@
     class:face-down={!card}
     class:trick-card={size === 'trick'}
     class:straw-card={size === 'straw'}
+    data-card-id={card ? `${card.suit}${card.rank}` : undefined}
+    data-flip-id={card ? `card-${card.suit}${card.rank}` : undefined}
   >
     {@render face()}
   </div>

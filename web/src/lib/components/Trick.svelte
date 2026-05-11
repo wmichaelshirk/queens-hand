@@ -43,7 +43,7 @@
 
 <div class="trick-area">
   <div class="trick-label">Trick {trickNum + 1}</div>
-  <div class="trick-compass">
+  <div class="trick-compass" data-zone="trick">
     {#if displayPlays.length > 0}
       {#each displayPlays as play (play.playerIndex)}
         {@const slot = seatSlot(play.playerIndex)}

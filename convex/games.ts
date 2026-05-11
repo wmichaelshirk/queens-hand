@@ -247,6 +247,7 @@ async function _startGame(
   await ctx.db.insert("game_live_state", { gameId, state });
 
   const currentPlayer = adapter.getCurrentPlayer(state);
+  const startEvents = events.filter((e: BareEvent) => ANIMATION_EVENT_FILTER.has(e.type));
   await ctx.db.insert("game_public_state", {
     gameId,
     currentTrick: state.currentTrick ?? [],
@@ -254,6 +255,7 @@ async function _startGame(
     currentTurn: currentPlayer,
     trickNum: state.trickNum ?? 0,
     phase: state.phase ?? "playing",
+    recentEvents: startEvents,
   });
 
   const hands = adapter.getHands(state);
@@ -488,6 +490,7 @@ export const getMyGameState = query({
           trickNum: 0,
           phase: "game_over",
           lastCompletedTrick: null as { plays: { playerIndex: number; card: any }[]; winner: number } | null,
+          recentEvents: [] as BareEvent[],
         },
         myHand: [] as Card[],
         legalMoves: [] as Move[],
@@ -524,6 +527,7 @@ export const getMyGameState = query({
           trickNum: 0,
           phase: "hand_over",
           lastCompletedTrick: null as { plays: { playerIndex: number; card: any }[]; winner: number } | null,
+          recentEvents: [] as BareEvent[],
         },
         myHand: [] as Card[],
         legalMoves: [] as Move[],
@@ -597,6 +601,7 @@ export const getMyGameState = query({
         trickNum: publicState.trickNum,
         phase: publicState.phase,
         lastCompletedTrick: (publicState.lastCompletedTrick ?? null) as { plays: { playerIndex: number; card: any }[]; winner: number } | null,
+        recentEvents: (publicState.recentEvents ?? []) as BareEvent[],
       },
       myHand,
       legalMoves,
@@ -1084,12 +1089,17 @@ async function _applyMoveLogic(
 
   // Normal move: update live state and public state
   await ctx.db.patch(liveStateRow._id, { state: nextState });
-  await _updatePublicAndHands(ctx, gameId, nextState, sortedSeats, adapter, lastTrickPatch);
+  await _updatePublicAndHands(ctx, gameId, nextState, sortedSeats, adapter, lastTrickPatch, events);
 
   const nextPlayer = adapter.getCurrentPlayer(nextState);
   const nextIsBot = await _isBot(ctx, sortedSeats, nextPlayer);
   return { nextIsBot, trickJustResolved: lastTrickPatch !== undefined };
 }
+
+const ANIMATION_EVENT_FILTER = new Set([
+  "CARD_PLAYED", "TRICK_RESOLVED", "CARD_REVEALED", "CARDS_MOVED",
+  "BID_MADE", "BID_PASSED", "HAND_SCORED",
+]);
 
 async function _updatePublicAndHands(
   ctx: MutationCtx,
@@ -1098,11 +1108,14 @@ async function _updatePublicAndHands(
   sortedSeats: Doc<"game_seats">[],
   adapter: EngineAdapter,
   lastTrickPatch?: { plays: { playerIndex: number; card: any }[]; winner: number },
+  recentEvents?: BareEvent[],
 ) {
   const publicRow = await ctx.db
     .query("game_public_state")
     .withIndex("by_game", (q) => q.eq("gameId", gameId))
     .unique();
+
+  const filteredEvents = (recentEvents ?? []).filter(e => ANIMATION_EVENT_FILTER.has(e.type));
 
   if (publicRow) {
     await ctx.db.patch(publicRow._id, {
@@ -1112,6 +1125,7 @@ async function _updatePublicAndHands(
       trickNum: state.trickNum ?? 0,
       phase: state.phase ?? "playing",
       ...(lastTrickPatch !== undefined ? { lastCompletedTrick: lastTrickPatch } : {}),
+      recentEvents: filteredEvents,
     });
   }
 
@@ -1292,6 +1306,7 @@ async function _startNextHand(
   await ctx.db.insert("game_live_state", { gameId, state: newState });
 
   const currentPlayer = Strohmandeln.getCurrentPlayer(newState);
+  const handStartEvents = dealEvents.filter((e) => ANIMATION_EVENT_FILTER.has(e.type));
   await ctx.db.insert("game_public_state", {
     gameId,
     currentTrick: newState.currentTrick ?? [],
@@ -1299,6 +1314,7 @@ async function _startNextHand(
     currentTurn: currentPlayer,
     trickNum: newState.trickNum ?? 0,
     phase: newState.phase ?? "bidding",
+    recentEvents: handStartEvents,
   });
 
   const hands = newState.hands as Card[][];

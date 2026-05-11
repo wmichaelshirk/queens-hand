@@ -17,6 +17,8 @@ Convex Auth + guest identity, Convex persistence schema.
 Lobby + waiting room, game initialisation, reactive state query (`getMyGameState`),
 move validation + engine dispatch (`applyMove`), bot moves (ISMCTS internalAction).
 
+- [ ] Dealer turn is not passing correctly in Slobberhannes.
+
 ---
 
 ## Phase 2: Web UI
@@ -61,13 +63,27 @@ Replace the inline username / edit / sign-out row in the header with a dropdown 
 - [ ] Guests can pick an avatar for the session (not persisted across sessions)
 
 ### 2.3 Event-driven UI
-- [ ] Animate `CARD_PLAYED` → card slides from hand to trick area
-- [ ] Animate `TRICK_WON` → trick slides toward winner
-- [ ] `PENALTY_ASSESSED` / `HAND_OVER` / `GAME_OVER` transitions
-- [ ] Strohmandeln pile reveal: when a card is flipped from the top of a straw pile
-      into a player's hand, display it face-up on the pile for ~1 second before
-      animating it into the hand — same pattern as the inter-trick pause already
-      implemented for trick clearing
+- [x] Animate `CARD_PLAYED` → card slides from hand/pile to trick (GSAP `from`, pre-captured
+      position; opponent cards fly from player-token area)
+- [x] Animate `TRICK_WON` → trick cards sweep toward winner token, then fade out
+      (scoped to `[data-zone="trick"]` so hand/pile cards are unaffected)
+- [x] Strohmandeln pile reveal → `CARD_REVEALED` emitted for all reveal cases:
+      T/K cascade: ghost card flips face-up then slides to hand (destination hand card
+      hidden until ghost arrives); normal suit card: flip-in-place on pile element;
+      last card: slide-only ghost. Game-start pile reveals also animate sequentially.
+- [x] Architecture: `recentEvents` field on `game_public_state` carries ordered engine
+      events to the client; `$effect.pre` captures DOM positions before Svelte updates;
+      single async IIFE sequences all animations with `await` so compound moves
+      (e.g. last card of a trick) always play in order.
+- [ ] `PENALTY_ASSESSED` / `HAND_OVER` / `GAME_OVER` transitions — HAND_OVER modal and
+      GAME_OVER screen exist; no dedicated enter/exit animations yet
+
+### 2.4 Dealer Token
+- [ ] Add a dealer token image to the "Player" zone to show who the current 
+      dealer is. Have it animate to the next player between hands.
+
+### 2.5 Game Details
+- [ ] Show game details somewhere in the board - such as rule set options.
 
 ### 2.9 Mid-game quit and kick
 
@@ -235,12 +251,12 @@ hands" without a structural change.
 
 ### Pre-5.3 Frontend game config
 
-- [ ] Create `web/src/lib/gameConfig.ts`: a map from gameType string → metadata
-      (display name, icon, card sort function, score direction). Replace the 4+
-      if/else game-type branches in the table page and lobby with config lookups.
-      (table page: lines 379, 407, 725; lobby game-picker: lines 112, 209–215)
-- [ ] Extract hand summary score interpretation to a helper `isScoreBad(gameType, delta)`
-      instead of baking the sign convention into the template.
+- [x] Add `GAME_REGISTRY` to `web/src/lib/gameConfig.ts` (name + icon per game type);
+      engines export `GAME_NAME` / `GAME_ICON` constants. Replaced all name/icon
+      if-else branches in table page and lobby with registry lookups.
+- [ ] Extend `GAME_REGISTRY` with card sort function and score direction; extract
+      `isScoreBad(gameType, delta)` instead of baking the sign convention into the
+      hand summary template.
       (`web/src/routes/table/[gameId]/+page.svelte:554–555`)
 
 ### 5.1 Generalize components before adding new games (see Pre-5.x above)

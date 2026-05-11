@@ -76,6 +76,7 @@ export default defineSchema({
       plays: v.array(v.object({ playerIndex: v.number(), card: v.any() })),
       winner: v.number(),
     })),
+    recentEvents: v.optional(v.array(v.any())),
   })
     .index("by_game", ["gameId"]),
 

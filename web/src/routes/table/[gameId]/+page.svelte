@@ -6,8 +6,8 @@
     isLoggedIn, guestSession, signOut,
     convex, watchQuery,
   } from "$lib/convex";
-  import { GAME_OPTIONS } from "$lib/gameConfig";
-  import type { Card, Move, StrawmanPileInfo } from "$lib/gameTypes";
+  import { GAME_OPTIONS, GAME_REGISTRY } from "$lib/gameConfig";
+  import type { Card, Move, StrawmanPileInfo, AnimEvent } from "$lib/gameTypes";
   import PlayingCard from "$lib/components/PlayingCard.svelte";
   import HandCards from "$lib/components/HandCards.svelte";
   import { whistSort, tarockSort } from "$lib/cardSort";
@@ -16,6 +16,8 @@
   import PlayerToken from "$lib/components/PlayerToken.svelte";
   import HandResultModal from "$lib/components/HandResultModal.svelte";
   import { getSlotForSeat } from "$lib/tableLayout";
+  import { captureState, animatePlayedCard, animateTrickToWinner, animateFlipReveal, animatePileTopReveal, wait } from "$lib/cardAnimations";
+  import type { CapturedState } from "$lib/cardAnimations";
 
   const gameId = $derived($page.params.gameId);
 
@@ -86,11 +88,6 @@
     result: { losers?: number[]; winners?: number[]; scores?: number[] } | null;
   };
 
-  const GAME_NAMES: Record<string, string> = {
-    slobberhannes: "Slobberhannes",
-    strohmandeln: "Strohmandeln",
-  };
-
   const tableData = watchQuery<TableData | null>("games:getTable" as any, { gameId });
 
   const myId = $derived(currentPlayer?._id);
@@ -141,6 +138,7 @@
     trickNum: number;
     phase: string;
     lastCompletedTrick: { plays: { playerIndex: number; card: { suit: string; rank: string } }[]; winner: number } | null;
+    recentEvents: AnimEvent[];
   };
 
   type ContinuationState = {
@@ -227,6 +225,99 @@
       }
     }
     if (gs.continuation) showHandSummary = true;
+  });
+
+  // ── Card animations ────────────────────────────────────────────────────────────
+  // Plain vars (not $state) to avoid reactive loops in the animation effects.
+  let _capturedState: CapturedState | null = null;
+  let _preCaptureKey = '';
+  let _lastEventKey = '';
+
+  // Capture card AND pile positions before Svelte updates the DOM.
+  // Triggered by incoming recentEvents so we capture even for compound moves
+  // (e.g. last card of a trick, where currentTrick jumps 0→N→0 in one update).
+  $effect.pre(() => {
+    const events = $gameState?.publicState.recentEvents ?? [];
+    const key = JSON.stringify(events);
+    if (key !== _preCaptureKey && events.some((e) =>
+      e.type === 'CARD_PLAYED' || e.type === 'CARD_REVEALED' || e.type === 'CARDS_MOVED'
+    )) {
+      _preCaptureKey = key;
+      _capturedState = captureState();
+    }
+  });
+
+  // Process all recentEvents sequentially so every animation plays in order.
+  $effect(() => {
+    const events = $gameState?.publicState.recentEvents ?? [];
+    if (!events.length) return;
+    const key = JSON.stringify(events);
+    if (key === _lastEventKey) return;
+    _lastEventKey = key;
+
+    const captured = _capturedState;
+    _capturedState = null;
+
+    (async () => {
+      const flipped = new Set<string>();
+
+      for (let i = 0; i < events.length; i++) {
+        const ev = events[i]!;
+
+        if (ev.type === 'CARD_PLAYED') {
+          if (captured) animatePlayedCard(captured, ev.card, ev.player);
+          await wait(450);
+
+        } else if (ev.type === 'TRICK_RESOLVED') {
+          // The Trick component sets showLastTrick in its own $effect, which
+          // schedules another render cycle. By the time we reach here we've
+          // already waited 450ms (from CARD_PLAYED), which is more than enough
+          // for that render to complete. Add a small extra pause before sweeping.
+          await wait(100);
+          animateTrickToWinner(ev.winner);
+          await wait(600);
+
+        } else if (ev.type === 'CARD_REVEALED') {
+          const k = `${ev.player}-${ev.pile}`;
+          flipped.add(k);
+
+          // Look ahead: does a CARDS_MOVED follow for this same pile?
+          // If yes → ghost flip + slide to hand (T/K cascade).
+          // If no  → card stays in the pile, flip-in the pile element in place.
+          const willMoveToHand = events.slice(i + 1).some(
+            e => e.type === 'CARDS_MOVED' &&
+                 e.transfers.some(
+                   t => t.from.zone === 'strawman' &&
+                        t.from.player === ev.player &&
+                        t.from.pile   === ev.pile,
+                 ),
+          );
+
+          if (willMoveToHand) {
+            const fromRect = captured?.piles.get(k);
+            await animateFlipReveal(ev.player, ev.pile, ev.card, false, fromRect);
+          } else {
+            animatePileTopReveal(ev.player, ev.pile);
+            await wait(400);
+          }
+
+        } else if (ev.type === 'CARDS_MOVED') {
+          for (const t of ev.transfers) {
+            if (t.from.zone === 'strawman') {
+              const k = `${t.from.player}-${t.from.pile}`;
+              if (!flipped.has(k)) {
+                const fromRect = captured?.piles.get(k);
+                await animateFlipReveal(
+                  t.from.player, t.from.pile, t.card,
+                  ev.reason === 'bottom-to-hand',
+                  fromRect,
+                );
+              }
+            }
+          }
+        }
+      }
+    })();
   });
 
   function moveLabel(move: Move): string {
@@ -392,9 +483,9 @@
       <button class="back-btn" onclick={leaveTable}>← Lobby</button>
       {#if $tableData}
         <span class="game-icon" aria-hidden="true">
-          {#if $tableData.gameType === "slobberhannes"}Q♣{:else}👨🏻‍🌾{/if}
+          {GAME_REGISTRY[$tableData.gameType]?.icon ?? ""}
         </span>
-        <span class="table-title">{GAME_NAMES[$tableData.gameType]}</span>
+        <span class="table-title">{GAME_REGISTRY[$tableData.gameType]?.name ?? $tableData.gameType}</span>
         <span class="status-badge" class:live={$tableData.status === "active"}>
           {$tableData.status === "active" ? "live" : $tableData.status === "finished" ? "finished" : "waiting"}
         </span>
@@ -420,9 +511,9 @@
         <div class="waiting-room">
           <h2 class="waiting-title">
             <span class="waiting-game-icon" aria-hidden="true">
-              {#if $tableData.gameType === "slobberhannes"}Q♣{:else}★{/if}
+              {GAME_REGISTRY[$tableData.gameType]?.icon ?? ""}
             </span>
-            {GAME_NAMES[$tableData.gameType]}
+            {GAME_REGISTRY[$tableData.gameType]?.name ?? $tableData.gameType}
           </h2>
 
           <p class="waiting-sub">
@@ -523,7 +614,7 @@
           {#if $tableData}
             <details class="rules-accordion">
               <summary class="rules-summary">
-                How to play {GAME_NAMES[$tableData.gameType]}
+                How to play {GAME_REGISTRY[$tableData.gameType]?.name ?? $tableData.gameType}
               </summary>
               {#if $tableData.gameType === "slobberhannes"}
                 <div class="rules-body">
@@ -584,14 +675,16 @@
                 {#if topRowSeats.length > 0}
                   <div class="top-row">
                     {#each topRowSeats as seat (seat.seatIndex)}
-                      <PlayerToken
-                        name={seat.displayName}
-                        isBot={seat.isBot}
-                        cardCount={seat.handSize}
-                        slot={seat.slot}
-                        score={$gameState.publicState.scores[seat.enginePlayerIndex] ?? 0}
-                        isCurrentTurn={seat.enginePlayerIndex === $gameState.publicState.currentTurn}
-                      />
+                      <div data-player-token={seat.enginePlayerIndex}>
+                        <PlayerToken
+                          name={seat.displayName}
+                          isBot={seat.isBot}
+                          cardCount={seat.handSize}
+                          slot={seat.slot}
+                          score={$gameState.publicState.scores[seat.enginePlayerIndex] ?? 0}
+                          isCurrentTurn={seat.enginePlayerIndex === $gameState.publicState.currentTurn}
+                        />
+                      </div>
                     {/each}
                   </div>
                 {/if}
@@ -600,14 +693,16 @@
                 <div class="middle-row">
                   <div class="side-left">
                     {#each leftSeats as seat (seat.seatIndex)}
-                      <PlayerToken
-                        name={seat.displayName}
-                        isBot={seat.isBot}
-                        cardCount={seat.handSize}
-                        slot="left"
-                        score={$gameState.publicState.scores[seat.enginePlayerIndex] ?? 0}
-                        isCurrentTurn={seat.enginePlayerIndex === $gameState.publicState.currentTurn}
-                      />
+                      <div data-player-token={seat.enginePlayerIndex}>
+                        <PlayerToken
+                          name={seat.displayName}
+                          isBot={seat.isBot}
+                          cardCount={seat.handSize}
+                          slot="left"
+                          score={$gameState.publicState.scores[seat.enginePlayerIndex] ?? 0}
+                          isCurrentTurn={seat.enginePlayerIndex === $gameState.publicState.currentTurn}
+                        />
+                      </div>
                     {/each}
                   </div>
 
@@ -617,7 +712,7 @@
                       {@const opponentPiles = $gameState.strawmen[opponentEngineIdx] ?? []}
                       <div class="strawmen-piles">
                         {#each opponentPiles as pile, i (i)}
-                          <Pile {pile} />
+                          <Pile {pile} playerIndex={opponentEngineIdx} pileIndex={i} />
                         {/each}
                       </div>
                     {/if}
@@ -636,14 +731,16 @@
 
                   <div class="side-right">
                     {#each rightSeats as seat (seat.seatIndex)}
-                      <PlayerToken
-                        name={seat.displayName}
-                        isBot={seat.isBot}
-                        cardCount={seat.handSize}
-                        slot="right"
-                        score={$gameState.publicState.scores[seat.enginePlayerIndex] ?? 0}
-                        isCurrentTurn={seat.enginePlayerIndex === $gameState.publicState.currentTurn}
-                      />
+                      <div data-player-token={seat.enginePlayerIndex}>
+                        <PlayerToken
+                          name={seat.displayName}
+                          isBot={seat.isBot}
+                          cardCount={seat.handSize}
+                          slot="right"
+                          score={$gameState.publicState.scores[seat.enginePlayerIndex] ?? 0}
+                          isCurrentTurn={seat.enginePlayerIndex === $gameState.publicState.currentTurn}
+                        />
+                      </div>
                     {/each}
                   </div>
                 </div>
@@ -651,14 +748,16 @@
                 <!-- Row 3: current player -->
                 <div class="bottom-row">
                   {#if myBottomSeat}
-                    <PlayerToken
-                      name={myBottomSeat.displayName}
-                      isBot={myBottomSeat.isBot}
-                      cardCount={0}
-                      slot="bottom"
-                      score={$gameState.publicState.scores[myBottomSeat.enginePlayerIndex] ?? 0}
-                      isCurrentTurn={isMyTurn}
-                    />
+                    <div data-player-token={myBottomSeat.enginePlayerIndex}>
+                      <PlayerToken
+                        name={myBottomSeat.displayName}
+                        isBot={myBottomSeat.isBot}
+                        cardCount={0}
+                        slot="bottom"
+                        score={$gameState.publicState.scores[myBottomSeat.enginePlayerIndex] ?? 0}
+                        isCurrentTurn={isMyTurn}
+                      />
+                    </div>
                   {/if}
 
                   {#if $gameState.strawmen}
@@ -676,6 +775,8 @@
                           onclick={pilePlayable && !busy && topCard
                             ? () => playMove({ type: 'PLAY_CARD', card: topCard })
                             : undefined}
+                          playerIndex={myEngineIndex}
+                          pileIndex={i}
                         />
                       {/each}
                     </div>
@@ -694,16 +795,18 @@
                     </div>
                   {/if}
 
-                  {#if $gameState.myHand.length > 0}
-                    <HandCards
-                      cards={$gameState.myHand}
-                      legalMoves={$gameState.legalMoves}
-                      isMyTurn={isMyTurn}
-                      {busy}
-                      onplay={(card) => playMove({ type: 'PLAY_CARD', card })}
-                      sortFn={$tableData.gameType === 'strohmandeln' ? tarockSort : whistSort}
-                    />
-                  {/if}
+                  <div data-hand-area={myEngineIndex}>
+                    {#if $gameState.myHand.length > 0}
+                      <HandCards
+                        cards={$gameState.myHand}
+                        legalMoves={$gameState.legalMoves}
+                        isMyTurn={isMyTurn}
+                        {busy}
+                        onplay={(card) => playMove({ type: 'PLAY_CARD', card })}
+                        sortFn={$tableData.gameType === 'strohmandeln' ? tarockSort : whistSort}
+                      />
+                    {/if}
+                  </div>
                 </div>
 
               </div>
@@ -717,7 +820,7 @@
         <!-- Game over screen -->
         <div class="game-over-screen">
           <div class="game-over-icon" aria-hidden="true">
-            {#if $tableData?.gameType === "slobberhannes"}Q♣{:else}★{/if}
+            {GAME_REGISTRY[$tableData?.gameType ?? ""]?.icon ?? ""}
           </div>
           <h2 class="game-over-title">Game Over</h2>
           {#if $tableData?.result}

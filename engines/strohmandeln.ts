@@ -2,9 +2,12 @@ import type { Card, BareEvent, EngineResult, Move } from '../types';
 import type { ISMCTSEngine } from '../lib/engine';
 import { bipartiteMatch } from '../lib/matching';
 
+export const GAME_NAME = "Strohmandeln";
+export const GAME_ICON = "👨🏻‍🌾";
+
 /*
  * STROHMANDELN — 2-player Austrian Tarock — Rules as implemented
- * Sources: Mayr & Sedlaczek (2008); Furr (2009); McLeod, J. (pagat.com/tarot/stroh.html).
+ * Sources: Mayr & Sedlaczek (2016); McLeod, J.
  * ────────────────────────────────────────────────────────────────────────────────
  *
  * DECK  (54 cards)
@@ -53,7 +56,6 @@ import { bipartiteMatch } from '../lib/matching';
  *   Starts at 1.  Only a no-bid 35–35 draw triggers doubling; the multiplier
  *   applies for the next round (2 hands) and does not compound (a second no-bid
  *   draw refreshes the 2-hand window rather than stacking).
- *   Any decisive result resets it to 1.
  *   The multiplier applies to the entire score (basic delta + bonuses).
  *
  * SCORING SYSTEMS  (select via DealConfig.scoring)
@@ -66,28 +68,21 @@ import { bipartiteMatch } from '../lib/matching';
  *     Trull = hold all three of {★, XXI, I} accessible (hand + pile tops).
  *     Royal Trull = hold all four Kings accessible.
  *
- *   Furr (2009):
- *     Win: +3; Major win (declarer ≥ 45 pts): +4.
- *     Loss: −4; Major loss (defender ≥ 44 pts): −5.  No-bid winner: +2.
- *     Bonuses (±1): Pagat Ultimo, Uhu, Kakadu, Mond Fang, Trull, Royal Trull.
- *     Bonus (±12): Valat (win all 27 tricks); replaces game value, Major Win,
- *                  Trull, and Royal Trull — Mond Fang and birds still score.
- *     Trull/Royal Trull: awarded to whoever captures all required cards.
- *     ⚠  NOT IMPLEMENTED: Rostopschin (±1) — Tarocks VII and VIII played in
- *        consecutive tricks.  Appears in Furr (2009) but not yet coded.
- *
  *   Mayr & Sedlaczek (2008):
  *     Win: +3.  Loss: −4.  No-bid winner: +2.
- *     Bonuses: same as Furr (excluding Rostopschin), plus Quapil (±1, win 4th-from-last trick with IV).
- *     No Major Win tier.  No Rostopschin.
+ *     Bonuses (±1): Pagat Ultimo, Uhu, Kakadu, Quapil, Mond Fang, Trull, Royal Trull.
+ *     Bonus (±12): Valat (win all 27 tricks); 
+ *        replaces game value, Trull, and Royal Trull — Mond Fang and birds still score.
+ *     Trull/Royal Trull: awarded to whoever captures all required cards.
+ *     
  *
  * BONUS REFERENCE
  *   Pagat Ultimo  (±1): win the last trick        with Tarock I.
  *   Uhu           (±1): win the penultimate trick  with Tarock II.
  *   Kakadu        (±1): win the antepenultimate    with Tarock III.
- *   Quapil        (±1): win the 4th-from-last      with Tarock IV.  [Mayr only]
- *   Valat         (±12): win all 27 tricks.  Replaces game value, Major Win,
- *                        Trull, and Royal Trull; Mond Fang and birds still apply.
+ *   Quapil        (±1): win the 4th-from-last      with Tarock IV.
+ *   Valat         (±12): win all 27 tricks.  Replaces game value, Trull,
+ *                        and Royal Trull; Mond Fang and birds still apply.
  *   Mond Fang     (±1): capture Mond (XXI) in a trick that also contains Sküs (★).
  *   Trull         (±1): capture (or announce, in Beck) all of {★, XXI, I}.
  *   Royal Trull   (±1): capture (or announce, in Beck) all four Kings.
@@ -146,17 +141,15 @@ function countCardPoints(cards: Card[]): number {
 function isTarock(c: Card): boolean { return c.suit === 'T'; }
 
 const PLAYER_COUNT          = 2  as const;
-// Typical hand outcome magnitude: Beck win/loss ≈ ±2–3; Furr/Mayr ≈ ±3–4; Valat ≈ ±12–15.
+// Typical hand outcome magnitude: Beck win/loss ≈ ±2–3; Mayr ≈ ±3–4; Valat ≈ ±12–15.
 // getReward normalises via tanh(r / REWARD_SCALE) → [0, 1]: normal results spread across
 // [0.1, 0.9]; extreme outliers (Valat) compress gracefully toward the tails.
 const REWARD_SCALE          = 4;   // private to engine; not exported
-const INITIAL_HAND_SIZE     = 15;   // 3 packets of 5 per player
+const INITIAL_HAND_SIZE     = 15;  // 3 packets of 5 per player
 const STRAWMAN_PILE_COUNT   = 3;
 const STRAWMAN_PILE_SIZE    = 4;
 const TRICKS_PER_HAND       = INITIAL_HAND_SIZE + STRAWMAN_PILE_COUNT * STRAWMAN_PILE_SIZE; // 27
 const DECLARER_WINS_AT      = 36;   // card points needed by declarer; 70 total
-const DECLARER_MAJOR_WIN_AT = 45;   // Schneider threshold for declarer (Furr/Mayr)
-const DEFENDER_MAJOR_WIN_AT = 44;   // Schneider threshold for defender (Furr/Mayr)
 
 // Cards required for each announcement
 const TRULL_RANKS       = new Set(['★', 'XXI', 'I']);
@@ -223,7 +216,7 @@ export interface ScoringSystem {
   scoreHand(summary: HandSummary): { basicDelta: number; bonusDelta: number };
 }
 
-export type ScoringSystemName = 'Beck' | 'Furr' | 'Mayr';
+export type ScoringSystemName = 'Beck' | 'Mayr';
 
 // Bonus helper: ±value depending on whether the achiever is the declarer.
 function _bonus(achiever: number | null, declarer: number, value: number): number {
@@ -248,7 +241,7 @@ const BECK: ScoringSystem = {
   },
 };
 
-function _furrMayrBonuses(s: HandSummary): number {
+function _MayrBonuses(s: HandSummary): number {
   return _bonus(s.pagatUltimoWinner, s.declarer, 1)
        + _bonus(s.uhuWinner,         s.declarer, 1)
        + _bonus(s.kakaduWinner,      s.declarer, 1)
@@ -265,40 +258,20 @@ function _valatBonuses(s: HandSummary, includeQuapil = false): number {
        + (includeQuapil ? _bonus(s.quapilWinner, s.declarer, 1) : 0);
 }
 
-/**
- * Furr (2009) — extended system with major-win tier and full bonus menu.
- * Note: despite appearing in the comparison table, Quapil is NOT in Furr per the source text.
- * Sources: Furr 2009.
- */
-const FURR: ScoringSystem = {
-  name:            'Furr',
-  noDeclarerValue: 2,
-  scoreHand(s) {
-    if (s.valatWinner !== null) {
-      return { basicDelta: _bonus(s.valatWinner, s.declarer, 12), bonusDelta: _valatBonuses(s) };
-    }
-    const declarerWon = s.declarerCardPoints >= DECLARER_WINS_AT;
-    const basicDelta  = declarerWon
-                          ? (s.declarerCardPoints >= DECLARER_MAJOR_WIN_AT ? 4 : 3)
-                          : (s.defenderCardPoints >= DEFENDER_MAJOR_WIN_AT ? -5 : -4);
-    // TODO: Rostopschin (±1) — Tarocks VII and VIII played in consecutive tricks.
-    return { basicDelta, bonusDelta: _furrMayrBonuses(s) };
-  },
-};
 
 /**
- * Mayr & Sedlaczek (2008) — like Furr but without Major Win and Rostopschin.
+ * Mayr & Sedlaczek (2008) 
  * Sources: Mayr & Sedlaczek 2008.
  */
 const MAYR: ScoringSystem = {
-  name:            'Mayr',
+  name: 'Mayr',
   noDeclarerValue: 2,
   scoreHand(s) {
     if (s.valatWinner !== null) {
       return { basicDelta: _bonus(s.valatWinner, s.declarer, 12), bonusDelta: _valatBonuses(s, true) };
     }
     const basicDelta  = s.declarerCardPoints >= DECLARER_WINS_AT ? 3 : -4;
-    const bonusDelta  = _furrMayrBonuses(s)
+    const bonusDelta  = _MayrBonuses(s)
                       + _bonus(s.quapilWinner, s.declarer, 1);
     return { basicDelta, bonusDelta };
   },
@@ -306,7 +279,6 @@ const MAYR: ScoringSystem = {
 
 export const SCORING_SYSTEMS: Record<ScoringSystemName, ScoringSystem> = {
   Beck: BECK,
-  Furr: FURR,
   Mayr: MAYR,
 };
 
@@ -590,7 +562,7 @@ function getHandResult(state: State): { declarerPoints: number; defenderPoints: 
 /**
  * Find who won a trick with the Bird (trumps I - IV) at a given position from the end.
  * fromEnd=1 = last trick (Pagat Ultimo), 2 = penultimate (Uhu), etc.
- * Returns the winner's player index, or null if Pagat was not played there or did not win.
+ * Returns the winner's player index, or null if given Bird was not played there.
  */
 function _birdWinnerAtPos(trickLog: TrickRecord[], fromEnd: number): number | null {
   const idx = trickLog.length - fromEnd;
@@ -598,7 +570,7 @@ function _birdWinnerAtPos(trickLog: TrickRecord[], fromEnd: number): number | nu
   const trick = trickLog[idx]!;
   const play  = trick.plays.find(p => p.card.suit === 'T' && p.card.rank === TAROCK_RANKS.at(-fromEnd));
   if (!play) return null;
-  return trick.winner === play.playerIndex ? trick.winner : null;
+  return trick.winner;
 }
 
 /** Derive everything a scoring system needs from a completed hand. */
@@ -686,31 +658,6 @@ function _breakdownItems(
     bi(s.trullWinner,       'Trull');
     bi(s.royalTrullWinner,  'Royal Trull');
 
-  } else if (scoring === 'Furr') {
-    if (s.valatWinner !== null) {
-      bi(s.valatWinner, 'Valat', 12);
-      bi(s.pagatUltimoWinner, 'Pagat Ultimo');
-      bi(s.uhuWinner,         'Uhu');
-      bi(s.kakaduWinner,      'Kakadu');
-      bi(s.mondFangWinner,    'Mond Fang');
-      // Trull + Royal Trull replaced by Valat
-    } else {
-      const declarerWon = s.declarerCardPoints >= DECLARER_WINS_AT;
-      const label = declarerWon
-        ? (s.declarerCardPoints >= DECLARER_MAJOR_WIN_AT ? 'major win'  : 'win')
-        : (s.defenderCardPoints >= DEFENDER_MAJOR_WIN_AT ? 'major loss' : 'loss');
-      const val = declarerWon
-        ? (s.declarerCardPoints >= DECLARER_MAJOR_WIN_AT ? 4  : 3)
-        : (s.defenderCardPoints >= DEFENDER_MAJOR_WIN_AT ? -5 : -4);
-      items.push({ label: `game (${label})`, declarerDelta: val });
-      bi(s.pagatUltimoWinner, 'Pagat Ultimo');
-      bi(s.uhuWinner,         'Uhu');
-      bi(s.kakaduWinner,      'Kakadu');
-      bi(s.mondFangWinner,    'Mond Fang');
-      bi(s.trullWinner,       'Trull');
-      bi(s.royalTrullWinner,  'Royal Trull');
-    }
-
   } else { // Mayr
     if (s.valatWinner !== null) {
       bi(s.valatWinner, 'Valat', 12);
@@ -759,26 +706,22 @@ function computeScoreBreakdown(state: State): PlayerScoreBreakdown[] | null {
       if (pagatWinner !== null) bonusItems.push({ player: pagatWinner, label: 'Pagat Ultimo' });
 
       if (state.scoring !== 'Beck') {
-        // Uhu, Kakadu (Furr + Mayr)
+        // Mayr Birds
         const uhuWinner    = _birdWinnerAtPos(state.trickLog, 2);
         const kakaduWinner = _birdWinnerAtPos(state.trickLog, 3);
+        const quapilWinner = _birdWinnerAtPos(state.trickLog, 4);
         if (uhuWinner    !== null) bonusItems.push({ player: uhuWinner,    label: 'Uhu' });
         if (kakaduWinner !== null) bonusItems.push({ player: kakaduWinner, label: 'Kakadu' });
+        if (quapilWinner !== null) bonusItems.push({ player: quapilWinner, label: 'Quapil' });
 
-        // Quapil (Mayr only)
-        if (state.scoring === 'Mayr') {
-          const quapilWinner = _birdWinnerAtPos(state.trickLog, 4);
-          if (quapilWinner !== null) bonusItems.push({ player: quapilWinner, label: 'Quapil' });
-        }
-
-        // Mond Fang (Furr + Mayr)
+        // Mond Fang ( Mayr)
         for (const { plays, winner } of state.trickLog) {
           const hasSküs = plays.some(p => p.card.suit === 'T' && p.card.rank === '★');
           const hasMond  = plays.some(p => p.card.suit === 'T' && p.card.rank === 'XXI');
           if (hasSküs && hasMond) { bonusItems.push({ player: winner, label: 'Mond Fang' }); break; }
         }
 
-        // Trull / Royal Trull from captured cards (Furr + Mayr — Beck requires announcement)
+        // Trull / Royal Trull from captured cards (Mayr — Beck requires announcement)
         const hasTrull = (cards: Card[]) => {
           const ranks = new Set(cards.filter(c => c.suit === 'T').map(c => c.rank));
           return ranks.has('★') && ranks.has('XXI') && ranks.has('I');
@@ -802,14 +745,15 @@ function computeScoreBreakdown(state: State): PlayerScoreBreakdown[] | null {
       }));
     }
 
-    const winner = p0pts > p1pts ? 0 : 1;
-    const delta  = SCORING_SYSTEMS[state.scoring].noDeclarerValue * state.handMultiplier;
-    return [0, 1].map(pi => ({
-      player: pi,
-      role:   'none' as const,
-      items:  [{ label: 'game (no-bid)', delta: pi === winner ? delta : -delta }],
-      total:  pi === winner ? delta : -delta,
-    }));
+    const rawItems = _noBidBreakdownItems(state);
+    const mult     = state.handMultiplier;
+    return [0, 1].map(pi => {
+      const sign  = pi === 0 ? 1 : -1;
+      const items = rawItems
+        .map(({ label, p0Delta }) => ({ label, delta: p0Delta * sign * mult }))
+        .filter(it => it.delta !== 0);
+      return { player: pi, role: 'none' as const, items, total: items.reduce((s, it) => s + it.delta, 0) };
+    });
   }
 
   const summary = computeHandSummary(state);
@@ -892,6 +836,10 @@ function _uncoverPile(s: State, pi: number, pileIdx: number, events: BareEvent[]
         reason: 'tarock-or-king',
       });
     } else {
+      // Normal suit card: stays as the new visible pile top.
+      // Emit CARD_REVEALED (same semantics as T/K reveal — card is now face-up);
+      // the absence of a following CARDS_MOVED tells the client it stays in the pile.
+      if (!simulate) events.push({ type: 'CARD_REVEALED', player: pi, pile: pileIdx, card: top });
       break;
     }
   }
@@ -932,6 +880,134 @@ function _gamePointsForHand(s: State): { declarerDelta: number; defenderDelta: n
   s.nextHandMultiplier = 1;
 
   return { declarerDelta: totalDelta, defenderDelta: -totalDelta };
+}
+
+/**
+ * Total hand delta for a no-bid non-draw hand, from player 0's perspective.
+ * Covers game value (or Valat replacement) + all applicable bonuses.
+ * Apply as: scores[0] += result * mult; scores[1] -= result * mult.
+ */
+function _noBidDelta(state: State): number {
+  const tl    = state.trickLog;
+  const p0pts = countCardPoints(state.capturedCards[0] ?? []);
+  const p1pts = countCardPoints(state.capturedCards[1] ?? []);
+  if (p0pts === p1pts) return 0;
+
+  let delta = 0;
+
+  const valatWinner = state.scoring !== 'Beck' && tl.length > 0
+    ? (tl.every(t => t.winner === 0) ? 0 : tl.every(t => t.winner === 1) ? 1 : null)
+    : null;
+
+  if (valatWinner !== null) {
+    delta += _bonus(valatWinner, 0, 12);
+  } else {
+    const winner = p0pts > p1pts ? 0 : 1;
+    delta += _bonus(winner, 0, SCORING_SYSTEMS[state.scoring].noDeclarerValue);
+  }
+
+  // Birds: ±1 per bird — winner of the bird trick gets +1 (zero-sum, so loser gets −1).
+  // This covers both success (bird player won) and failure (bird player lost) automatically.
+  const birdPositions = state.scoring === 'Beck' ? [1] : [1, 2, 3, 4];
+  for (const fromEnd of birdPositions) {
+    delta += _bonus(_birdWinnerAtPos(tl, fromEnd), 0, 1);
+  }
+
+  if (state.scoring === 'Beck') {
+    for (const ann of state.announcements) {
+      if (ann.name === 'Trull' || ann.name === 'RoyalTrull') {
+        delta += _bonus(ann.player, 0, 1);
+      }
+    }
+    return delta;
+  }
+
+  // Mayr: Mond Fang applies regardless of Valat
+  for (const { plays, winner } of tl) {
+    const hasSküs = plays.some(p => p.card.suit === 'T' && p.card.rank === '★');
+    const hasMond  = plays.some(p => p.card.suit === 'T' && p.card.rank === 'XXI');
+    if (hasSküs && hasMond) { delta += _bonus(winner, 0, 1); break; }
+  }
+
+  // Mayr: Trull / Royal Trull from captured cards (replaced by Valat if applicable)
+  if (valatWinner === null) {
+    const hasTrull = (cs: Card[]) => {
+      const r = new Set(cs.filter(c => c.suit === 'T').map(c => c.rank));
+      return r.has('★') && r.has('XXI') && r.has('I');
+    };
+    const hasRoyalTrull = (cs: Card[]) => cs.filter(c => c.rank === 'K').length >= 4;
+    for (let pi = 0; pi < 2; pi++) {
+      const cards = state.capturedCards[pi] ?? [];
+      if (hasTrull(cards))      delta += _bonus(pi, 0, 1);
+      if (hasRoyalTrull(cards)) delta += _bonus(pi, 0, 1);
+    }
+  }
+
+  return delta;
+}
+
+/**
+ * Labeled line-items for a no-bid non-draw hand, from player 0's perspective.
+ * Mirrors _noBidDelta but produces display items for computeScoreBreakdown.
+ */
+function _noBidBreakdownItems(state: State): Array<{ label: string; p0Delta: number }> {
+  const tl    = state.trickLog;
+  const p0pts = countCardPoints(state.capturedCards[0] ?? []);
+  const p1pts = countCardPoints(state.capturedCards[1] ?? []);
+  if (p0pts === p1pts) return [];
+
+  const items: Array<{ label: string; p0Delta: number }> = [];
+  const bi = (achiever: number | null, label: string, val = 1) => {
+    const d = _bonus(achiever, 0, val);
+    if (d !== 0) items.push({ label, p0Delta: d });
+  };
+
+  const valatWinner = state.scoring !== 'Beck' && tl.length > 0
+    ? (tl.every(t => t.winner === 0) ? 0 : tl.every(t => t.winner === 1) ? 1 : null)
+    : null;
+
+  if (valatWinner !== null) {
+    bi(valatWinner, 'Valat', 12);
+  } else {
+    const winner = p0pts > p1pts ? 0 : 1;
+    bi(winner, 'game (no-bid)', SCORING_SYSTEMS[state.scoring].noDeclarerValue);
+  }
+
+  const birdPositions = state.scoring === 'Beck' ? [1] : [1, 2, 3, 4];
+  const birdLabels    = ['Pagat Ultimo', 'Uhu', 'Kakadu', 'Quapil'] as const;
+  for (const fromEnd of birdPositions) {
+    bi(_birdWinnerAtPos(tl, fromEnd), birdLabels[fromEnd - 1]!);
+  }
+
+  if (state.scoring === 'Beck') {
+    for (const ann of state.announcements) {
+      if (ann.name === 'Trull' || ann.name === 'RoyalTrull') {
+        bi(ann.player, ann.name === 'Trull' ? 'Trull' : 'Royal Trull');
+      }
+    }
+    return items;
+  }
+
+  for (const { plays, winner } of tl) {
+    const hasSküs = plays.some(p => p.card.suit === 'T' && p.card.rank === '★');
+    const hasMond  = plays.some(p => p.card.suit === 'T' && p.card.rank === 'XXI');
+    if (hasSküs && hasMond) { bi(winner, 'Mond Fang'); break; }
+  }
+
+  if (valatWinner === null) {
+    const hasTrull = (cs: Card[]) => {
+      const r = new Set(cs.filter(c => c.suit === 'T').map(c => c.rank));
+      return r.has('★') && r.has('XXI') && r.has('I');
+    };
+    const hasRoyalTrull = (cs: Card[]) => cs.filter(c => c.rank === 'K').length >= 4;
+    for (let pi = 0; pi < 2; pi++) {
+      const cards = state.capturedCards[pi] ?? [];
+      if (hasTrull(cards))      bi(pi, 'Trull');
+      if (hasRoyalTrull(cards)) bi(pi, 'Royal Trull');
+    }
+  }
+
+  return items;
 }
 
 // ── Transitions ───────────────────────────────────────────────────────────────
@@ -1008,8 +1084,13 @@ function _applyCardPlay(state: State, card: Card, simulate: boolean): EngineResu
   if (removedFrom === null) {
     throw new Error(`Card ${JSON.stringify(card)} not available for player ${pi}`);
   }
+
+  // Collect pile-reveal events separately so they appear AFTER CARD_PLAYED and
+  // TRICK_RESOLVED in the event stream — giving animations the correct sequence:
+  // card flies to trick → trick sweeps → new pile top flips → slides to hand.
+  const pileEvents: BareEvent[] = [];
   if (typeof removedFrom === 'number') {
-    _uncoverPile(s, pi, removedFrom, events, simulate);
+    _uncoverPile(s, pi, removedFrom, pileEvents, simulate);
   }
 
   if (s.pendingAnnouncement !== null) s.pendingAnnouncement = null;
@@ -1065,17 +1146,15 @@ function _applyCardPlay(state: State, card: Card, simulate: boolean): EngineResu
           s.nextHandMultiplier = 2;   // no-bid draw: refresh to ×2 for next round (no compounding)
         } else {
           s.nextHandMultiplier = 1;
-          const winner = p0pts > p1pts ? 0 : 1;
-          const loser  = 1 - winner;
-          const delta  = SCORING_SYSTEMS[s.scoring].noDeclarerValue * s.handMultiplier;
-          s.scores[winner]! += delta;
-          s.scores[loser]!  -= delta;
+          const totalDelta = _noBidDelta(s) * s.handMultiplier;
+          s.scores[0]! += totalDelta;
+          s.scores[1]! -= totalDelta;
           if (!simulate) {
             events.push({
               type:          'HAND_SCORED',
               deltas:        [
-                { player: winner, delta:  delta, reason: 'no-declarer-win' },
-                { player: loser,  delta: -delta, reason: 'no-declarer-loss' },
+                { player: 0, delta:  totalDelta, reason: 'no-declarer' },
+                { player: 1, delta: -totalDelta, reason: 'no-declarer' },
               ],
               runningTotals: [...s.scores],
             });
@@ -1086,6 +1165,9 @@ function _applyCardPlay(state: State, card: Card, simulate: boolean): EngineResu
       s.phase = 'hand_over';
     }
   }
+
+  // Pile reveals always follow trick events in the stream.
+  for (const e of pileEvents) events.push(e);
 
   return { state: s, events };
 }
@@ -1254,9 +1336,9 @@ export {
   // Constants
   TAROCK_RANKS, BLACK_RANKS, RED_RANKS, BLACK_SUITS, RED_SUITS,
   PLAYER_COUNT, INITIAL_HAND_SIZE, STRAWMAN_PILE_COUNT, STRAWMAN_PILE_SIZE,
-  TRICKS_PER_HAND, DECLARER_WINS_AT, DECLARER_MAJOR_WIN_AT, DEFENDER_MAJOR_WIN_AT,
+  TRICKS_PER_HAND, DECLARER_WINS_AT,
   // Scoring systems
-  BECK, FURR, MAYR,
+  BECK, MAYR,
   // Card utilities
   createDeck, shuffle, cardEquals, cardPointValue, countCardPoints, isTarock,
   // State lifecycle
