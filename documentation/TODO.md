@@ -17,7 +17,10 @@ Convex Auth + guest identity, Convex persistence schema.
 Lobby + waiting room, game initialisation, reactive state query (`getMyGameState`),
 move validation + engine dispatch (`applyMove`), bot moves (ISMCTS internalAction).
 
-- [ ] Dealer turn is not passing correctly in Slobberhannes.
+- [x] Dealer turn not passing correctly in Slobberhannes — fixed: added `dealer` field
+      to engine state; `reDeal` now rotates off `state.dealer` not `state.leader`
+      (last trick winner). First leader is always eldest hand `(dealer+1)%n`.
+      Initial dealer is random for both games.
 
 ---
 
