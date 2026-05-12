@@ -560,6 +560,33 @@
     }
   }
 
+  // ── Options popover ────────────────────────────────────────────────────────────
+
+  let showOptionsPopover = $state(false);
+  let optionsWrapperEl = $state<HTMLElement | undefined>(undefined);
+
+  const activeOptions = $derived(
+    $tableData
+      ? (GAME_OPTIONS[$tableData.gameType] ?? []).map(opt => ({
+          label: opt.label,
+          currentLabel: opt.choices.find(
+            c => c.value === String($tableData!.settings?.[opt.key] ?? opt.default)
+          )?.label ?? String($tableData!.settings?.[opt.key] ?? opt.default),
+        }))
+      : []
+  );
+
+  $effect(() => {
+    if (!showOptionsPopover) return;
+    function onDocClick(e: MouseEvent) {
+      if (optionsWrapperEl && !optionsWrapperEl.contains(e.target as Node)) {
+        showOptionsPopover = false;
+      }
+    }
+    document.addEventListener('click', onDocClick);
+    return () => document.removeEventListener('click', onDocClick);
+  });
+
   // ── Table chat ─────────────────────────────────────────────────────────────────
 
   type TableMsg = { _id: string; playerId: string; displayName: string; text: string; ts: number };
@@ -600,7 +627,31 @@
         <span class="game-icon" aria-hidden="true">
           {GAME_REGISTRY[$tableData.gameType]?.icon ?? ""}
         </span>
-        <span class="table-title">{GAME_REGISTRY[$tableData.gameType]?.name ?? $tableData.gameType}</span>
+        {#if activeOptions.length > 0}
+          <div class="title-options-wrapper" bind:this={optionsWrapperEl}>
+            <button
+              class="table-title title-options-btn"
+              onclick={() => showOptionsPopover = !showOptionsPopover}
+              aria-expanded={showOptionsPopover}
+            >
+              {GAME_REGISTRY[$tableData.gameType]?.name ?? $tableData.gameType}
+              <span class="title-caret" class:open={showOptionsPopover} aria-hidden="true">▾</span>
+            </button>
+            {#if showOptionsPopover}
+              <div class="options-popover" role="dialog" aria-label="Game options">
+                <div class="options-popover-title">Game options</div>
+                {#each activeOptions as opt}
+                  <div class="options-popover-row">
+                    <span class="options-popover-label">{opt.label}</span>
+                    <span class="options-popover-value">{opt.currentLabel}</span>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {:else}
+          <span class="table-title">{GAME_REGISTRY[$tableData.gameType]?.name ?? $tableData.gameType}</span>
+        {/if}
         <span class="status-badge" class:live={$tableData.status === "active"}>
           {$tableData.status === "active" ? "live" : $tableData.status === "finished" ? "finished" : "waiting"}
         </span>
@@ -1104,6 +1155,74 @@
     color: #e94560;
   }
 
+  .title-options-wrapper {
+    position: relative;
+  }
+
+  .title-options-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  .title-caret {
+    font-size: 0.7rem;
+    color: #a03040;
+    transition: transform 0.15s;
+    line-height: 1;
+  }
+
+  .title-caret.open {
+    transform: rotate(180deg);
+  }
+
+  .options-popover {
+    position: absolute;
+    top: calc(100% + 0.5rem);
+    left: 0;
+    z-index: 200;
+    background: #12192e;
+    border: 1px solid #0f3460;
+    border-radius: 8px;
+    padding: 0.65rem 0.85rem;
+    min-width: 200px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  }
+
+  .options-popover-title {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #555;
+    padding-bottom: 0.35rem;
+    border-bottom: 1px solid #1a2a40;
+  }
+
+  .options-popover-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  .options-popover-label {
+    font-size: 0.82rem;
+    color: #999;
+  }
+
+  .options-popover-value {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #e0e0e0;
+  }
+
   .status-badge {
     font-size: 0.7rem;
     text-transform: uppercase;
@@ -1132,10 +1251,10 @@
   /* ── Game area ───────────────────────────────────────────────────────────── */
   .game-area {
     display: flex;
-    align-items: flex-start;
+    align-items: stretch;
     justify-content: center;
     overflow-y: auto;
-    padding: 2rem;
+    padding: 0;
   }
 
   .waiting-room {
@@ -1145,6 +1264,7 @@
     gap: 1.5rem;
     max-width: 540px;
     width: 100%;
+    padding: 2rem;
   }
 
   .waiting-title {
@@ -1408,6 +1528,8 @@
     display: flex;
     flex-direction: column;
     gap: 1.5rem;
+    flex: 1;
+    min-height: 0;
     width: 100%;
     max-width: 820px;
   }
@@ -1416,7 +1538,8 @@
   .table-layout {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    justify-content: space-between;
+    flex: 1;
     width: 100%;
   }
 
@@ -1425,7 +1548,6 @@
     display: flex;
     justify-content: center;
     gap: 3rem;
-    flex-wrap: wrap;
   }
 
   /* Row 2: left side | center table | right side */
@@ -1433,6 +1555,7 @@
     display: flex;
     align-items: center;
     gap: 0.75rem;
+    flex: 1;
     width: 100%;
   }
 

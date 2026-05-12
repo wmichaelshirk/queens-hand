@@ -16,11 +16,8 @@ Convex Auth + guest identity, Convex persistence schema.
 
 Lobby + waiting room, game initialisation, reactive state query (`getMyGameState`),
 move validation + engine dispatch (`applyMove`), bot moves (ISMCTS internalAction).
-
-- [x] Dealer turn not passing correctly in Slobberhannes — fixed: added `dealer` field
-      to engine state; `reDeal` now rotates off `state.dealer` not `state.leader`
-      (last trick winner). First leader is always eldest hand `(dealer+1)%n`.
-      Initial dealer is random for both games.
+Dealer rotation fixed for both games (random first dealer; rotate off `state.dealer`,
+not trick winner; eldest hand leads first trick).
 
 ---
 
@@ -28,18 +25,22 @@ move validation + engine dispatch (`applyMove`), bot moves (ISMCTS internalActio
 
 Completed: app shell, static game state rendering (hand, trick, scores, card backs),
 input handling, hand summary panel, rules reference accordion, game identity icons,
-game-over screen.
+game-over screen, magic-link auth, card animations (CARD_PLAYED, TRICK_WON,
+Strohmandeln pile reveals including cascade/flip/slide variants), GAME_REGISTRY
+(name + icon per game type, replaces all if-else branches).
 
 ### 2.0 Stabilize the "table" portion of the screen:
+- [x] Table layout stabilized: game-active/table-layout now use `flex: 1` and
+      `justify-content: space-between`; middle-row stretches to fill; game-area
+      padding moved to waiting-room only so the board fills the viewport cleanly.
 - [ ] Anchor hands to outside edges (or, a contained MAX sized box) so that 
-      things don't bounce around and resize.
+      things don't bounce around and resize when card counts change.
 - [ ] change {isSeated ? "Enter" : "Watch"} - to "Enter" if you're seated; 
       "Watch" if the game is already started, and "Join" if it hasn't started
       yet and there are open seats
 - [ ] Perhaps add a table flag of "looking for players" to indicate anyone
       should join you and sit, or contrariwise a "private" to indicate they should
       not?
-
 
 ### 2.1 Auth — Google login + magic link
 - [x] Magic link (Resend) — fully working; three-layer fix: `authResolving` guard blocks
@@ -96,8 +97,13 @@ Replace the inline username / edit / sign-out row in the header with a dropdown 
 - [ ] Add a dealer token image to the "Player" zone to show who the current 
       dealer is. Have it animate to the next player between hands.
 
-### 2.5 Game Details
-- [ ] Show game details somewhere in the board - such as rule set options.
+### 2.5 Game Details ✓
+
+- [x] Header popover on the game title: when a game type has options (currently
+      Strohmandeln only), the title renders as a button with a `▾` caret; clicking
+      opens an absolutely-positioned popover listing each option and its active value.
+      Strohmandeln games now also default to Mayr scoring (backend `GAME_DEFAULT_SETTINGS`
+      map seeds `createTable`; all `"Beck"` fallbacks corrected to `"Mayr"`).
 
 ### 2.9 Mid-game quit and kick
 

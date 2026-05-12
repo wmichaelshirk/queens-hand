@@ -27,6 +27,11 @@ const GAME_CONFIG = {
   strohmandeln:  { min: 2, max: 2, default: 2 },
 } as const;
 
+const GAME_DEFAULT_SETTINGS: Record<string, Record<string, unknown>> = {
+  slobberhannes: {},
+  strohmandeln:  { scoring: 'Mayr' },
+};
+
 // ── Auth helper ───────────────────────────────────────────────────────────────
 
 async function resolvePlayer(ctx: MutationCtx, guestUserId: string | undefined) {
@@ -134,7 +139,7 @@ const strahAdapter: EngineAdapter = {
     const rawState = Strohmandeln.dealState({
       scores: scores ?? null,
       dealerIndex: firstPlayer,
-      scoring: (settings.scoring as Strohmandeln.ScoringSystemName | undefined) ?? "Beck",
+      scoring: (settings.scoring as Strohmandeln.ScoringSystemName | undefined) ?? "Mayr",
     });
     return Strohmandeln.uncoverStrawmenInitial(rawState);
   },
@@ -153,7 +158,7 @@ const strahAdapter: EngineAdapter = {
     const rawState = Strohmandeln.dealState({
       scores: state.scores,
       dealerIndex: (state.dealerIndex + 1) % 2,
-      scoring: (settings.scoring as Strohmandeln.ScoringSystemName | undefined) ?? state.scoring ?? "Beck",
+      scoring: (settings.scoring as Strohmandeln.ScoringSystemName | undefined) ?? state.scoring ?? "Mayr",
       handMultiplier: state.nextHandMultiplier,
     });
     return Strohmandeln.uncoverStrawmenInitial(rawState);
@@ -645,7 +650,7 @@ export const createTable = mutation({
       seatCount: cfg.max,
       minSeatCount: cfg.min,
       creatorPlayerId: player._id,
-      settings: {},
+      settings: GAME_DEFAULT_SETTINGS[gameType] ?? {},
       startedAt: Date.now(),
     });
 
@@ -1229,7 +1234,7 @@ async function _enterBetweenHands(
     scores: [...(handOverState.scores ?? [0, 0])],
     nextHandMultiplier: handOverState.nextHandMultiplier ?? 1,
     nextDealerIndex: ((handOverState.dealerIndex ?? 0) + 1) % 2,
-    scoring: handOverState.scoring ?? "Beck",
+    scoring: handOverState.scoring ?? "Mayr",
   };
 
   // Delete all live rows — they are no longer needed
@@ -1306,7 +1311,7 @@ async function _startNextHand(
   const rawState = Strohmandeln.dealState({
     scores: cd.scores,
     dealerIndex: cd.nextDealerIndex,
-    scoring: cd.scoring ?? "Beck",
+    scoring: cd.scoring ?? "Mayr",
     handMultiplier: cd.nextHandMultiplier ?? 1,
   });
   const { state: newState, events: dealEvents } = Strohmandeln.uncoverStrawmenInitial(rawState);
