@@ -2,6 +2,7 @@
   import { goto } from "$app/navigation";
   import { browser } from "$app/environment";
   import { page } from "$app/stores";
+  import { tick } from "svelte";
   import {
     isLoggedIn, guestSession, signOut,
     convex, watchQuery,
@@ -16,8 +17,7 @@
   import PlayerToken from "$lib/components/PlayerToken.svelte";
   import HandResultModal from "$lib/components/HandResultModal.svelte";
   import { getSlotForSeat } from "$lib/tableLayout";
-  import { captureState, animatePlayedCard, animateTrickToWinner, animateFlipReveal, animatePileTopReveal, wait } from "$lib/cardAnimations";
-  import type { CapturedState } from "$lib/cardAnimations";
+  import { animatePlayedCard, animateTrickToWinner, animateFlipReveal, animatePileReveal, animateCardArrive, wait } from "$lib/cardAnimations";
 
   const gameId = $derived($page.params.gameId);
 
@@ -176,13 +176,29 @@
     $gameState?.seats.find((s) => s.playerId === myId)?.enginePlayerIndex ?? -1
   );
 
+  // ── Display state gate ─────────────────────────────────────────────────────
+  // displayState is what components render. It trails liveState ($gameState) by
+  // one animation batch so the DOM never jumps ahead of the event sequence.
+  let displayState = $state<GameState>(null);
+  let _animRunning = $state(false);
+  let _pendingState: NonNullable<GameState> | null = null;
+  let _lastEventKey = '';
+
+  $effect(() => {
+    if ($gameState && !displayState) {
+      displayState = $gameState;
+      _lastEventKey = JSON.stringify($gameState.publicState.recentEvents);
+    }
+  });
+
   const isMyTurn = $derived(
+    !_animRunning &&
     myEngineIndex >= 0 && $gameState?.publicState.currentTurn === myEngineIndex
   );
 
   // Separate card-play moves (handled by clicking hand) from bid/announce moves
   const nonCardMoves = $derived(
-    ($gameState?.legalMoves ?? []).filter((m) => m.type !== "PLAY_CARD")
+    (displayState?.legalMoves ?? []).filter((m) => m.type !== "PLAY_CARD")
   );
 
   const seatSlots = $derived(
@@ -229,97 +245,195 @@
   });
 
   // ── Card animations ────────────────────────────────────────────────────────────
-  // Plain vars (not $state) to avoid reactive loops in the animation effects.
-  let _capturedState: CapturedState | null = null;
-  let _preCaptureKey = '';
-  let _lastEventKey = '';
 
-  // Capture card AND pile positions before Svelte updates the DOM.
-  // Triggered by incoming recentEvents so we capture even for compound moves
-  // (e.g. last card of a trick, where currentTrick jumps 0→N→0 in one update).
-  $effect.pre(() => {
-    const events = $gameState?.publicState.recentEvents ?? [];
-    const key = JSON.stringify(events);
-    if (key !== _preCaptureKey && events.some((e) =>
-      e.type === 'CARD_PLAYED' || e.type === 'CARD_REVEALED' || e.type === 'CARDS_MOVED'
-    )) {
-      _preCaptureKey = key;
-      _capturedState = captureState();
-    }
-  });
-
-  // Process all recentEvents sequentially so every animation plays in order.
+  // Gate incoming state updates through the animation system.
   $effect(() => {
-    const events = $gameState?.publicState.recentEvents ?? [];
-    if (!events.length) return;
-    const key = JSON.stringify(events);
+    const incoming = $gameState;
+    if (!incoming || !displayState) return;
+
+    const key = JSON.stringify(incoming.publicState.recentEvents);
     if (key === _lastEventKey) return;
     _lastEventKey = key;
 
-    const captured = _capturedState;
-    _capturedState = null;
+    if (_animRunning) {
+      _pendingState = incoming;
+      return;
+    }
 
-    (async () => {
-      const flipped = new Set<string>();
+    void runAnimations(incoming);
+  });
 
-      for (let i = 0; i < events.length; i++) {
-        const ev = events[i]!;
+  async function runAnimations(toState: NonNullable<GameState>) {
+    _animRunning = true;
+    try {
+      await animateEventSequence(toState.publicState.recentEvents, toState);
+    } finally {
+      displayState = toState;
+      _animRunning = false;
+      if (_pendingState) {
+        const next = _pendingState;
+        _pendingState = null;
+        void runAnimations(next);
+      }
+    }
+  }
 
-        if (ev.type === 'CARD_PLAYED') {
-          if (captured) animatePlayedCard(captured, ev.card, ev.player);
-          await wait(450);
+  async function animateEventSequence(events: AnimEvent[], toState: NonNullable<GameState>) {
+    // Piles whose CARD_REVEALED already spawned animateFlipReveal — skip in CARDS_MOVED.
+    const animatedPiles = new Set<string>();
 
-        } else if (ev.type === 'TRICK_RESOLVED') {
-          // The Trick component sets showLastTrick in its own $effect, which
-          // schedules another render cycle. By the time we reach here we've
-          // already waited 450ms (from CARD_PLAYED), which is more than enough
-          // for that render to complete. Add a small extra pause before sweeping.
-          await wait(100);
-          animateTrickToWinner(ev.winner);
-          await wait(600);
+    function willMoveToHand(fromIdx: number, player: number, pile: number): boolean {
+      return events.slice(fromIdx + 1).some(
+        e => e.type === 'CARDS_MOVED' &&
+             e.transfers.some(
+               t => t.from.zone === 'strawman' &&
+                    t.from.player === player &&
+                    t.from.pile   === pile,
+             ),
+      );
+    }
 
-        } else if (ev.type === 'CARD_REVEALED') {
-          const k = `${ev.player}-${ev.pile}`;
-          flipped.add(k);
+    for (let i = 0; i < events.length; i++) {
+      const ev = events[i]!;
 
-          // Look ahead: does a CARDS_MOVED follow for this same pile?
-          // If yes → ghost flip + slide to hand (T/K cascade).
-          // If no  → card stays in the pile, flip-in the pile element in place.
-          const willMoveToHand = events.slice(i + 1).some(
-            e => e.type === 'CARDS_MOVED' &&
-                 e.transfers.some(
-                   t => t.from.zone === 'strawman' &&
-                        t.from.player === ev.player &&
-                        t.from.pile   === ev.pile,
-                 ),
-          );
+      if (ev.type === 'CARD_PLAYED') {
+        // Capture card position before displayState updates — check hand first, then pile
+        const flipId = `card-${ev.card.suit}${ev.card.rank}`;
+        const handCardEl = document.querySelector(
+          `[data-hand-area="${ev.player}"] [data-flip-id="${flipId}"]`,
+        ) as HTMLElement | null;
+        let fromRect = handCardEl?.getBoundingClientRect();
 
-          if (willMoveToHand) {
-            const fromRect = captured?.piles.get(k);
-            await animateFlipReveal(ev.player, ev.pile, ev.card, false, fromRect);
-          } else {
-            animatePileTopReveal(ev.player, ev.pile);
-            await wait(400);
+        // Find which pile the card came from (if any) for both position capture and state update
+        let cardPile: { player: number; pile: number } | null = null;
+        if (displayState!.strawmen) {
+          for (let p = 0; p < displayState!.strawmen.length; p++) {
+            const piles = displayState!.strawmen[p]!;
+            const l = piles.findIndex(
+              pl => pl.topCard?.suit === ev.card.suit && pl.topCard?.rank === ev.card.rank,
+            );
+            if (l >= 0) { cardPile = { player: p, pile: l }; break; }
           }
+        }
 
-        } else if (ev.type === 'CARDS_MOVED') {
-          for (const t of ev.transfers) {
-            if (t.from.zone === 'strawman') {
-              const k = `${t.from.player}-${t.from.pile}`;
-              if (!flipped.has(k)) {
-                const fromRect = captured?.piles.get(k);
-                await animateFlipReveal(
-                  t.from.player, t.from.pile, t.card,
-                  ev.reason === 'bottom-to-hand',
-                  fromRect,
-                );
-              }
+        // If not found in hand, use pile card position (handles pile-played and opponent cards)
+        if (!fromRect && cardPile) {
+          const pileCardEl = document.querySelector(
+            `[data-pile-player="${cardPile.player}"][data-pile-index="${cardPile.pile}"] [data-flip-id="${flipId}"]`,
+          ) as HTMLElement | null;
+          fromRect = pileCardEl?.getBoundingClientRect();
+        }
+
+        // Advance displayState: card moves from hand/pile to trick
+        displayState = {
+          ...displayState!,
+          myHand: ev.player === myEngineIndex
+            ? displayState!.myHand.filter(
+                c => !(c.suit === ev.card.suit && c.rank === ev.card.rank),
+              )
+            : displayState!.myHand,
+          strawmen: cardPile && displayState!.strawmen
+            ? displayState!.strawmen.map((playerPiles, pi) =>
+                pi === cardPile!.player
+                  ? playerPiles.map((pile, li) =>
+                      li === cardPile!.pile ? { ...pile, topCard: null } : pile,
+                    )
+                  : playerPiles,
+              )
+            : displayState!.strawmen,
+          publicState: {
+            ...displayState!.publicState,
+            currentTrick: [
+              ...displayState!.publicState.currentTrick,
+              { playerIndex: ev.player, card: ev.card },
+            ],
+          },
+        };
+
+        await tick(); // let Svelte render trick card before GSAP reads its position
+        animatePlayedCard(ev.card, ev.player, fromRect);
+        await wait(450);
+
+      } else if (ev.type === 'TRICK_RESOLVED') {
+        await wait(100);
+        animateTrickToWinner(ev.winner);
+        await wait(600);
+
+        displayState = {
+          ...displayState!,
+          publicState: {
+            ...displayState!.publicState,
+            currentTrick: [],
+            lastCompletedTrick: toState.publicState.lastCompletedTrick,
+            trickNum: toState.publicState.trickNum,
+          },
+        };
+
+      } else if (ev.type === 'CARD_REVEALED') {
+        const k = `${ev.player}-${ev.pile}`;
+
+        if (willMoveToHand(i, ev.player, ev.pile)) {
+          // T/K cascade: ghost flips and slides to hand.
+          // displayState.topCard stays null — card never "appears" in pile.
+          animatedPiles.add(k);
+          await animateFlipReveal(ev.player, ev.pile, ev.card, false);
+        } else {
+          // Normal suit card stays in pile: in-place ghost flip.
+          // onMidpoint updates displayState at the 90° edge so Svelte renders
+          // the face-up card behind the hidden pile element during phase 2.
+          await animatePileReveal(ev.player, ev.pile, ev.card, async () => {
+            displayState = {
+              ...displayState!,
+              strawmen: displayState!.strawmen?.map((playerPiles, pi) =>
+                pi === ev.player
+                  ? playerPiles.map((pile, li) =>
+                      li === ev.pile ? { ...pile, topCard: ev.card } : pile,
+                    )
+                  : playerPiles,
+              ) ?? null,
+            };
+            await tick();
+          });
+        }
+
+      } else if (ev.type === 'CARDS_MOVED') {
+        for (const t of ev.transfers) {
+          if (t.from.zone === 'strawman') {
+            const k = `${t.from.player}-${t.from.pile}`;
+            if (!animatedPiles.has(k)) {
+              // bottom-to-hand: no preceding flip, just slide
+              await animateFlipReveal(t.from.player, t.from.pile, t.card, true);
             }
           }
         }
+
+        // Sync hand and pile state from toState after all transfers animated
+        displayState = {
+          ...displayState!,
+          myHand: toState.myHand,
+          strawmen: toState.strawmen,
+        };
+
+        // Fade in newly arrived hand cards
+        await tick();
+        for (const t of ev.transfers) {
+          if (t.to.zone === 'hand' && t.to.player === myEngineIndex) {
+            animateCardArrive(myEngineIndex, t.card);
+          }
+        }
+
+      } else if (ev.type === 'HAND_SCORED') {
+        await wait(200);
+        displayState = {
+          ...displayState!,
+          publicState: {
+            ...displayState!.publicState,
+            scores: toState.publicState.scores,
+          },
+        };
       }
-    })();
-  });
+    }
+  }
 
   function moveLabel(move: Move): string {
     if (move.type === "PLAY_CARD") return `${move.card.rank}${move.card.suit}`;
@@ -648,21 +762,21 @@
 
       {:else if $tableData.status === "active" || $tableData.status === "between_hands" || $tableData.status === "finished"}
         <div class="game-active">
-          {#if $gameState}
-            <!-- Hand result modal (all games, all phases) -->
-            {#if showHandSummary && ($gameState.lastHandSummary || $gameState.continuation)}
-              {@const hs = $gameState.lastHandSummary ?? {
+          {#if displayState}
+            <!-- Hand result modal — uses live $gameState so it shows immediately on hand end -->
+            {#if showHandSummary && ($gameState?.lastHandSummary || $gameState?.continuation)}
+              {@const hs = $gameState?.lastHandSummary ?? {
                 deltas: [],
-                runningTotals: $gameState.publicState.scores,
-                seatNames: $gameState.seats.map(s => s.displayName),
+                runningTotals: $gameState?.publicState.scores ?? [],
+                seatNames: $gameState?.seats.map(s => s.displayName) ?? [],
                 breakdown: null,
                 gameTarget: null,
                 losers: null,
               }}
               <HandResultModal
                 summary={hs}
-                continuation={$gameState.continuation}
-                phase={$gameState.publicState.phase}
+                continuation={$gameState?.continuation ?? null}
+                phase={$gameState?.publicState.phase ?? ''}
                 {busy}
                 onDismiss={() => showHandSummary = false}
                 onVote={voteContinue}
@@ -682,9 +796,9 @@
                           isBot={seat.isBot}
                           cardCount={seat.handSize}
                           slot={seat.slot}
-                          score={$gameState.publicState.scores[seat.enginePlayerIndex] ?? 0}
-                          isCurrentTurn={seat.enginePlayerIndex === $gameState.publicState.currentTurn}
-                          isDealer={seat.enginePlayerIndex === $gameState.publicState.dealer}
+                          score={displayState.publicState.scores[seat.enginePlayerIndex] ?? 0}
+                          isCurrentTurn={seat.enginePlayerIndex === displayState.publicState.currentTurn}
+                          isDealer={seat.enginePlayerIndex === displayState.publicState.dealer}
                         />
                       </div>
                     {/each}
@@ -701,18 +815,18 @@
                           isBot={seat.isBot}
                           cardCount={seat.handSize}
                           slot="left"
-                          score={$gameState.publicState.scores[seat.enginePlayerIndex] ?? 0}
-                          isCurrentTurn={seat.enginePlayerIndex === $gameState.publicState.currentTurn}
-                          isDealer={seat.enginePlayerIndex === $gameState.publicState.dealer}
+                          score={displayState.publicState.scores[seat.enginePlayerIndex] ?? 0}
+                          isCurrentTurn={seat.enginePlayerIndex === displayState.publicState.currentTurn}
+                          isDealer={seat.enginePlayerIndex === displayState.publicState.dealer}
                         />
                       </div>
                     {/each}
                   </div>
 
                   <div class="table-center">
-                    {#if $gameState.strawmen}
+                    {#if displayState.strawmen}
                       {@const opponentEngineIdx = myEngineIndex === 0 ? 1 : 0}
-                      {@const opponentPiles = $gameState.strawmen[opponentEngineIdx] ?? []}
+                      {@const opponentPiles = displayState.strawmen[opponentEngineIdx] ?? []}
                       <div class="strawmen-piles">
                         {#each opponentPiles as pile, i (i)}
                           <Pile {pile} playerIndex={opponentEngineIdx} pileIndex={i} />
@@ -720,14 +834,14 @@
                       </div>
                     {/if}
                     <Trick
-                      trick={$gameState.publicState.currentTrick}
-                      lastCompletedTrick={$gameState.publicState.lastCompletedTrick}
-                      trickNum={$gameState.publicState.trickNum}
+                      trick={displayState.publicState.currentTrick}
+                      lastCompletedTrick={null}
+                      trickNum={displayState.publicState.trickNum}
                       {seatName}
                       seatSlot={(engineIdx) => getSlotForSeat(
                         myEngineIndex >= 0 ? myEngineIndex : 0,
                         engineIdx,
-                        $gameState!.seats.length
+                        displayState!.seats.length
                       )}
                     />
                   </div>
@@ -740,9 +854,9 @@
                           isBot={seat.isBot}
                           cardCount={seat.handSize}
                           slot="right"
-                          score={$gameState.publicState.scores[seat.enginePlayerIndex] ?? 0}
-                          isCurrentTurn={seat.enginePlayerIndex === $gameState.publicState.currentTurn}
-                          isDealer={seat.enginePlayerIndex === $gameState.publicState.dealer}
+                          score={displayState.publicState.scores[seat.enginePlayerIndex] ?? 0}
+                          isCurrentTurn={seat.enginePlayerIndex === displayState.publicState.currentTurn}
+                          isDealer={seat.enginePlayerIndex === displayState.publicState.dealer}
                         />
                       </div>
                     {/each}
@@ -758,19 +872,19 @@
                         isBot={myBottomSeat.isBot}
                         cardCount={0}
                         slot="bottom"
-                        score={$gameState.publicState.scores[myBottomSeat.enginePlayerIndex] ?? 0}
+                        score={displayState.publicState.scores[myBottomSeat.enginePlayerIndex] ?? 0}
                         isCurrentTurn={isMyTurn}
-                        isDealer={myBottomSeat.enginePlayerIndex === $gameState.publicState.dealer}
+                        isDealer={myBottomSeat.enginePlayerIndex === displayState.publicState.dealer}
                       />
                     </div>
                   {/if}
 
-                  {#if $gameState.strawmen}
-                    {@const myPiles = $gameState.strawmen[myEngineIndex] ?? []}
+                  {#if displayState.strawmen}
+                    {@const myPiles = displayState.strawmen[myEngineIndex] ?? []}
                     <div class="strawmen-piles">
                       {#each myPiles as pile, i (i)}
                         {@const topCard = pile.topCard}
-                        {@const pilePlayable = isMyTurn && !!topCard && ($gameState?.legalMoves ?? []).some(
+                        {@const pilePlayable = isMyTurn && !!topCard && (displayState.legalMoves ?? []).some(
                           m => m.type === 'PLAY_CARD' && m.card.suit === topCard.suit && m.card.rank === topCard.rank
                         )}
                         <Pile
@@ -801,10 +915,10 @@
                   {/if}
 
                   <div data-hand-area={myEngineIndex}>
-                    {#if $gameState.myHand.length > 0}
+                    {#if displayState.myHand.length > 0}
                       <HandCards
-                        cards={$gameState.myHand}
-                        legalMoves={$gameState.legalMoves}
+                        cards={displayState.myHand}
+                        legalMoves={displayState.legalMoves}
                         isMyTurn={isMyTurn}
                         {busy}
                         onplay={(card) => playMove({ type: 'PLAY_CARD', card })}

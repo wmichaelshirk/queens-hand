@@ -18,8 +18,8 @@
   const H = 2;  // px per level horizontally
 </script>
 
-<div class="straw-pile" class:empty={!pile.topCard}>
-  {#if pile.topCard}
+<div class="straw-pile" class:empty={pile.depth === 0}>
+  {#if pile.depth > 0}
     {@const shown = Math.min(pile.depth, MAX_SHOWN)}
     <div class="pile-stack" style="--depth: {shown}">
       {#each Array(shown) as _, i}
@@ -34,7 +34,11 @@
       <div class="pile-face" style="left: {shown * H}px"
            data-pile-player={playerIndex}
            data-pile-index={pileIndex}>
-        <PlayingCard card={pile.topCard} size="straw" {playable} {dimmed} {onclick} />
+        {#if pile.topCard}
+          <PlayingCard card={pile.topCard} size="straw" {playable} {dimmed} {onclick} />
+        {:else}
+          <PlayingCard size="straw" />
+        {/if}
       </div>
     </div>
   {:else}

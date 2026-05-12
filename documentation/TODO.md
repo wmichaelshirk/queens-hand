@@ -30,6 +30,17 @@ Completed: app shell, static game state rendering (hand, trick, scores, card bac
 input handling, hand summary panel, rules reference accordion, game identity icons,
 game-over screen.
 
+### 2.0 Stabilize the "table" portion of the screen:
+- [ ] Anchor hands to outside edges (or, a contained MAX sized box) so that 
+      things don't bounce around and resize.
+- [ ] change {isSeated ? "Enter" : "Watch"} - to "Enter" if you're seated; 
+      "Watch" if the game is already started, and "Join" if it hasn't started
+      yet and there are open seats
+- [ ] Perhaps add a table flag of "looking for players" to indicate anyone
+      should join you and sit, or contrariwise a "private" to indicate they should
+      not?
+
+
 ### 2.1 Auth — Google login + magic link
 - [x] Magic link (Resend) — fully working; three-layer fix: `authResolving` guard blocks
       lobby redirect during code exchange; `_authWired` flag skips initial `setAuth(null)`

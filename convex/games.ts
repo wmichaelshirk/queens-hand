@@ -906,7 +906,7 @@ export const applyMove = mutation({
     const { nextIsBot, trickJustResolved } = await _applyMoveLogic(ctx, gameId, myEngineIndex, move as Move);
 
     if (nextIsBot) {
-      await ctx.scheduler.runAfter(trickJustResolved ? 1200 : 0, internal.games.applyBotMoves, { gameId });
+      await ctx.scheduler.runAfter(0, internal.games.applyBotMoves, { gameId });
     }
   },
 });

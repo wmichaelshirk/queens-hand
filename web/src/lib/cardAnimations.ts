@@ -1,48 +1,20 @@
 import gsap from 'gsap';
 
-/**
- * Pre-DOM-update snapshot of card and pile positions.
- * cards: data-flip-id → screen rect (for animating played cards)
- * piles: "${player}-${pile}" → screen rect (for animating pile reveals)
- */
-export type CapturedState = {
-  cards: Map<string, DOMRect>;
-  piles: Map<string, DOMRect>;
-};
-
-/** Capture card and pile positions before a DOM update. */
-export function captureState(): CapturedState {
-  const cards = new Map<string, DOMRect>();
-  document.querySelectorAll('[data-flip-id]').forEach((el) => {
-    const id = el.getAttribute('data-flip-id');
-    if (id) cards.set(id, (el as HTMLElement).getBoundingClientRect());
-  });
-
-  const piles = new Map<string, DOMRect>();
-  document.querySelectorAll('[data-pile-player][data-pile-index]').forEach((el) => {
-    const player = el.getAttribute('data-pile-player');
-    const pile   = el.getAttribute('data-pile-index');
-    if (player !== null && pile !== null) {
-      piles.set(`${player}-${pile}`, (el as HTMLElement).getBoundingClientRect());
-    }
-  });
-
-  return { cards, piles };
-}
-
 export function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
  * Animate the newly played card flying into the trick zone.
- * Uses the pre-captured position if the card was face-up (user's own card);
- * otherwise animates from the opponent's player-token area.
+ * Caller must update displayState and call tick() before calling this so the
+ * trick card element already exists in the DOM.
+ * fromRect: pre-captured position of the card in the hand (own card).
+ * If absent, animates from the opponent's player-token area instead.
  */
 export function animatePlayedCard(
-  captured: CapturedState,
   playedCard: { suit: string; rank: string },
   playerIndex: number,
+  fromRect?: DOMRect,
 ): void {
   const flipId = `card-${playedCard.suit}${playedCard.rank}`;
   const trickCardEl = document.querySelector(
@@ -50,13 +22,12 @@ export function animatePlayedCard(
   ) as HTMLElement | null;
   if (!trickCardEl) return;
 
-  const fromRect = captured.cards.get(flipId);
-  const toRect   = trickCardEl.getBoundingClientRect();
+  const toRect = trickCardEl.getBoundingClientRect();
 
   if (fromRect) {
     gsap.from(trickCardEl, {
-      x: (fromRect.left + fromRect.width  / 2) - (toRect.left + toRect.width  / 2),
-      y: (fromRect.top  + fromRect.height / 2) - (toRect.top  + toRect.height / 2),
+      x: (fromRect.left + fromRect.width / 2) - (toRect.left + toRect.width / 2),
+      y: (fromRect.top + fromRect.height / 2) - (toRect.top + toRect.height / 2),
       opacity: 0,
       duration: 0.4,
       ease: 'power2.out',
@@ -67,8 +38,8 @@ export function animatePlayedCard(
     if (!sourceEl) return;
     const srcRect = sourceEl.getBoundingClientRect();
     gsap.from(trickCardEl, {
-      x: (srcRect.left + srcRect.width  / 2) - (toRect.left + toRect.width  / 2),
-      y: (srcRect.top  + srcRect.height / 2) - (toRect.top  + toRect.height / 2),
+      x: (srcRect.left + srcRect.width / 2) - (toRect.left + toRect.width / 2),
+      y: (srcRect.top + srcRect.height / 2) - (toRect.top + toRect.height / 2),
       scale: 0.7,
       opacity: 0,
       duration: 0.4,
@@ -80,14 +51,14 @@ export function animatePlayedCard(
 
 /**
  * Animate trick-zone cards flying to the winner's seat token, then fade out.
- * Only targets [data-zone="trick"] cards — does not touch hand or pile cards.
+ * Only targets [data-zone="trick"] cards.
  */
 export function animateTrickToWinner(winnerEngineIndex: number): void {
   const target = document.querySelector(`[data-player-token="${winnerEngineIndex}"]`);
   if (!target) return;
-  const rect  = target.getBoundingClientRect();
-  const destX = rect.left + rect.width  / 2;
-  const destY = rect.top  + rect.height / 2;
+  const rect = target.getBoundingClientRect();
+  const destX = rect.left + rect.width / 2;
+  const destY = rect.top + rect.height / 2;
 
   const cards = document.querySelectorAll('[data-zone="trick"] [data-card-id]');
   if (!cards.length) return;
@@ -106,98 +77,123 @@ export function animateTrickToWinner(winnerEngineIndex: number): void {
     duration: 0.45,
     ease: 'power2.in',
     stagger: 0.04,
-    // No clearProps — elements are removed by Svelte; clearing would cause a blink.
+    // No clearProps — elements removed by Svelte; clearing would cause a blink.
   });
 }
 
 /**
- * Animate a card becoming the new visible top of a pile (stays in place).
- * Used for CARD_REVEALED when no CARDS_MOVED follows (normal suit card, not T/K).
+ * Animate a pile card being revealed in place (stays in the pile after reveal).
+ *
+ * A ghost overlay performs the full flip so the real pile element is never
+ * in a half-animated state. The sequence:
+ *   1. Ghost (face-down) covers the pile face element.
+ *   2. Ghost rotates to 90° (edge-on / invisible).
+ *   3. onMidpoint() is awaited — caller updates displayState so Svelte renders
+ *      the face-up card behind the hidden pile face element.
+ *   4. Ghost switches to face-up appearance and rotates back to 0°.
+ *   5. Ghost is removed; pile face becomes visible showing the real face-up card.
  */
-export function animatePileTopReveal(pilePlayerIndex: number, pileIndex: number): void {
+export async function animatePileReveal(
+  pilePlayerIndex: number,
+  pileIndex: number,
+  card: { suit: string; rank: string },
+  onMidpoint: () => Promise<void>,
+): Promise<void> {
   const pileEl = document.querySelector(
     `[data-pile-player="${pilePlayerIndex}"][data-pile-index="${pileIndex}"]`,
   ) as HTMLElement | null;
-  if (!pileEl) return;
 
-  gsap.from(pileEl, {
-    rotationY: 90,
-    opacity: 0,
-    duration: 0.35,
-    ease: 'power2.out',
-    clearProps: 'transform,opacity',
-  });
+  if (!pileEl) {
+    await onMidpoint();
+    return;
+  }
+
+  const pRect = pileEl.getBoundingClientRect();
+
+  const ghost = document.createElement('div');
+  ghost.style.cssText = [
+    'position:fixed', 'z-index:9999', 'pointer-events:none',
+    'width:65px', 'height:91px', 'border-radius:7px',
+    'background:#1a3464', 'border:1px solid #0f244a',
+    `left:${pRect.left}px`, `top:${pRect.top}px`,
+  ].join(';');
+  document.body.appendChild(ghost);
+
+  gsap.set(pileEl, { visibility: 'hidden' });
+
+  // Phase 1: rotate ghost to edge (face-down disappears)
+  await new Promise<void>((r) =>
+    gsap.to(ghost, { rotationY: 90, duration: 0.2, ease: 'power2.in', onComplete: r }),
+  );
+
+  // Midpoint: caller updates displayState; Svelte renders face-up card behind the hidden pile
+  await onMidpoint();
+
+  // Switch ghost to face-up appearance (still at 90°, so invisible during swap)
+  const isRed = card.suit === '♥' || card.suit === '♦';
+  ghost.style.background = '#f8f5ee';
+  ghost.style.border = '1px solid #bbb';
+  ghost.style.color = isRed ? '#c0392b' : card.suit === 'T' ? '#6c3fbd' : '#1a1a2e';
+  ghost.style.fontSize = '0.85rem';
+  ghost.style.fontWeight = '800';
+  ghost.style.fontFamily = 'Courier New, monospace';
+  ghost.style.display = 'flex';
+  ghost.style.alignItems = 'center';
+  ghost.style.justifyContent = 'center';
+  ghost.textContent = `${card.rank}${card.suit === 'T' ? '' : card.suit}`;
+
+  // Phase 2: rotate ghost from edge to face-up
+  await new Promise<void>((r) =>
+    gsap.to(ghost, { rotationY: 0, duration: 0.2, ease: 'power2.out', onComplete: r }),
+  );
+
+  ghost.remove();
+  gsap.set(pileEl, { clearProps: 'visibility' });
 }
 
 /**
  * Animate a Strohmandeln pile card leaving as a ghost overlay.
  *
- * fromRect: pre-captured pile position (required when the pile element may no
- *           longer exist in the DOM after the state update).
+ * isLastCard=true  → slide only (CARDS_MOVED bottom-to-hand, no flip needed)
+ * isLastCard=false → flip face-up then slide (CARD_REVEALED + CARDS_MOVED T/K cascade)
  *
- * isLastCard=true  → slide only (CARDS_MOVED bottom-to-hand, no flip)
- * isLastCard=false → flip face-up then slide (CARD_REVEALED + CARDS_MOVED)
- *
- * When the card lands in the hand area, any pre-existing hand card element
- * matching the card is hidden at start and revealed on arrival, so the DOM
- * state doesn't leak through before the animation completes.
+ * The ghost starts at the pile face element's current position. The caller
+ * is responsible for updating displayState (adding card to hand) after this
+ * promise resolves.
  */
 export function animateFlipReveal(
   pilePlayerIndex: number,
   pileIndex: number,
   card: { suit: string; rank: string },
   isLastCard: boolean,
-  fromRect?: DOMRect,
 ): Promise<void> {
-  // Prefer the pre-captured position; fall back to querying the current DOM.
-  const pRect = fromRect
-    ?? (document.querySelector(
-         `[data-pile-player="${pilePlayerIndex}"][data-pile-index="${pileIndex}"]`,
-       ) as HTMLElement | null)?.getBoundingClientRect();
-
+  const pileEl = document.querySelector(
+    `[data-pile-player="${pilePlayerIndex}"][data-pile-index="${pileIndex}"]`,
+  ) as HTMLElement | null;
+  const pRect = pileEl?.getBoundingClientRect();
   if (!pRect) return Promise.resolve();
 
   const ghost = document.createElement('div');
   ghost.style.cssText = [
-    'position:fixed',
-    'z-index:9999',
-    'pointer-events:none',
-    'width:65px',
-    'height:91px',
-    'border-radius:7px',
-    'background:#1a3464',
-    'border:1px solid #0f244a',
-    `left:${pRect.left}px`,
-    `top:${pRect.top}px`,
-    'display:flex',
-    'align-items:center',
-    'justify-content:center',
-    'font-size:0.85rem',
-    'font-weight:800',
-    'font-family:Courier New,monospace',
+    'position:fixed', 'z-index:9999', 'pointer-events:none',
+    'width:65px', 'height:91px', 'border-radius:7px',
+    'background:#1a3464', 'border:1px solid #0f244a',
+    `left:${pRect.left}px`, `top:${pRect.top}px`,
+    'display:flex', 'align-items:center', 'justify-content:center',
+    'font-size:0.85rem', 'font-weight:800', 'font-family:Courier New,monospace',
     'color:#1a1a2e',
   ].join(';');
   document.body.appendChild(ghost);
 
-  // Prefer the visible hand area (user's own piles) over the player-token marker
-  // (used for opponents whose hand cards aren't rendered on screen).
   const handEl =
     document.querySelector(`[data-hand-area="${pilePlayerIndex}"]`) ??
     document.querySelector(`[data-player-token="${pilePlayerIndex}"]`);
 
-  // Hide the destination hand card (if visible) so the DOM state doesn't show
-  // before the ghost animation arrives. Reveal it in slideToHand's onComplete.
-  const flipId = `card-${card.suit}${card.rank}`;
-  const handCardEl = document.querySelector(
-    `[data-hand-area="${pilePlayerIndex}"] [data-flip-id="${flipId}"]`,
-  ) as HTMLElement | null;
-  if (handCardEl) gsap.set(handCardEl, { opacity: 0 });
-
   const slideToHand = (): Promise<void> => {
     const ghostRect = ghost.getBoundingClientRect();
     const dest = handEl ? handEl.getBoundingClientRect() : pRect;
-    const dx = (dest.left + dest.width  / 2) - (ghostRect.left + ghostRect.width  / 2);
-    const dy = (dest.top  + dest.height / 2) - (ghostRect.top  + ghostRect.height / 2);
+    const dx = (dest.left + dest.width / 2) - (ghostRect.left + ghostRect.width / 2);
+    const dy = (dest.top + dest.height / 2) - (ghostRect.top + ghostRect.height / 2);
     return new Promise((resolve) => {
       gsap.to(ghost, {
         x: `+=${dx}`,
@@ -208,8 +204,6 @@ export function animateFlipReveal(
         ease: 'power2.in',
         onComplete: () => {
           ghost.remove();
-          // Reveal the hand card now that the ghost has arrived.
-          if (handCardEl) gsap.to(handCardEl, { opacity: 1, duration: 0.15, clearProps: 'opacity' });
           resolve();
         },
       });
@@ -240,4 +234,21 @@ export function animateFlipReveal(
 
     tl.to(ghost, { rotationY: 0, duration: 0.2, ease: 'power2.out' });
   });
+}
+
+/**
+ * Fade-in a card that just arrived in a hand area after a CARDS_MOVED update.
+ * Called after displayState is updated and tick() has been awaited.
+ */
+export function animateCardArrive(
+  playerIndex: number,
+  card: { suit: string; rank: string },
+): void {
+  const flipId = `card-${card.suit}${card.rank}`;
+  const el = document.querySelector(
+    `[data-hand-area="${playerIndex}"] [data-flip-id="${flipId}"]`,
+  ) as HTMLElement | null;
+  if (el) {
+    gsap.from(el, { opacity: 0, scale: 0.8, duration: 0.2, clearProps: 'transform,opacity' });
+  }
 }
