@@ -181,7 +181,7 @@
   // one animation batch so the DOM never jumps ahead of the event sequence.
   let displayState = $state<GameState>(null);
   let _animRunning = $state(false);
-  let _pendingState: NonNullable<GameState> | null = null;
+  let _pendingQueue: NonNullable<GameState>[] = [];
   let _lastEventKey = '';
 
   $effect(() => {
@@ -256,7 +256,7 @@
     _lastEventKey = key;
 
     if (_animRunning) {
-      _pendingState = incoming;
+      _pendingQueue.push(incoming);
       return;
     }
 
@@ -270,10 +270,8 @@
     } finally {
       displayState = toState;
       _animRunning = false;
-      if (_pendingState) {
-        const next = _pendingState;
-        _pendingState = null;
-        void runAnimations(next);
+      if (_pendingQueue.length > 0) {
+        void runAnimations(_pendingQueue.shift()!);
       }
     }
   }

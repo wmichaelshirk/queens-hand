@@ -27,7 +27,13 @@ Completed: app shell, static game state rendering (hand, trick, scores, card bac
 input handling, hand summary panel, rules reference accordion, game identity icons,
 game-over screen, magic-link auth, card animations (CARD_PLAYED, TRICK_WON,
 Strohmandeln pile reveals including cascade/flip/slide variants), GAME_REGISTRY
-(name + icon per game type, replaces all if-else branches).
+(name + icon per game type, replaces all if-else branches), lobby button labels
+(Return/Enter/Watch by seat + game status), ghost card fidelity (`cardFaceUtils.ts`
+— `applyFaceUpToGhost` renders corners + emoji center matching `PlayingCard`; shared
+by `PlayingCard.svelte` and all animation ghost elements), card hover animation
+changed from `top` (layout reflow) to `transform: translateY` (GPU-composited),
+animation state queue (`_pendingQueue` array replaces single-slot `_pendingState`
+so rapid server updates no longer drop intermediate states).
 
 ### 2.0 Stabilize the "table" portion of the screen:
 - [x] Table layout stabilized: game-active/table-layout now use `flex: 1` and
@@ -35,9 +41,8 @@ Strohmandeln pile reveals including cascade/flip/slide variants), GAME_REGISTRY
       padding moved to waiting-room only so the board fills the viewport cleanly.
 - [ ] Anchor hands to outside edges (or, a contained MAX sized box) so that 
       things don't bounce around and resize when card counts change.
-- [ ] change {isSeated ? "Enter" : "Watch"} - to "Enter" if you're seated; 
-      "Watch" if the game is already started, and "Join" if it hasn't started
-      yet and there are open seats
+- [x] Lobby table card button: "Return" if already seated; "Enter" if game is
+      waiting and seat is available; "Watch" otherwise
 - [ ] Perhaps add a table flag of "looking for players" to indicate anyone
       should join you and sit, or contrariwise a "private" to indicate they should
       not?
@@ -92,6 +97,9 @@ Replace the inline username / edit / sign-out row in the header with a dropdown 
       (e.g. last card of a trick) always play in order.
 - [ ] `PENALTY_ASSESSED` / `HAND_OVER` / `GAME_OVER` transitions — HAND_OVER modal and
       GAME_OVER screen exist; no dedicated enter/exit animations yet
+- [x] Fix: flipped Strohmandeln pile cards now use full card face rendering —
+      `applyFaceUpToGhost` in `cardFaceUtils.ts` builds corners + emoji center matching
+      the `PlayingCard` component; used by both `animatePileReveal` and `animateFlipReveal`
 
 ### 2.4 Dealer Token
 - [ ] Add a dealer token image to the "Player" zone to show who the current 
@@ -194,6 +202,8 @@ hands" without a structural change.
 - [ ] All seated players' hands must be visible to spectators
 - [ ] Spectators must not see the Quit / Continue voting UI that appears between
       hands in Strohmandeln
+- [ ] Fix: one player is not displayed at all when watching a game — all seated
+      players should be visible to spectators
 
 ### 3.5 Game record attribution
 - [ ] Guest players (no email, no persistent account) must be recorded in game

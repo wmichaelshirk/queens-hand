@@ -221,7 +221,8 @@
       {#if $activeTables}
         {#each $activeTables as table (table._id)}
           {@const myId = currentPlayer?._id}
-          {@const isSeated = table.seats.some((s) => s.playerId === myId)}
+          {@const isSeated = table.seats.some(s => s.playerId === myId)}
+          {@const canJoin = table.status === "waiting" && table.seats.length < table.seatCount}
           <div class="table-card">
             <div class="card-header">
               <span class="game-icon-sm">{GAME_REGISTRY[table.gameType]?.icon ?? ""}</span>
@@ -246,7 +247,7 @@
                 {/if}
               </span>
               <button class="btn accent-sm" onclick={() => goto(`/table/${table._id}`)}>
-                {isSeated ? "Enter" : "Watch"}
+                {isSeated ? "Return" : canJoin ? "Enter" : "Watch"}
               </button>
             </div>
           </div>

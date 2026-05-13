@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Card } from '$lib/gameTypes';
+  import { isRedSuit, centerSymbol } from '$lib/cardFaceUtils';
 
   interface Props {
     card?: Card | null;
@@ -10,20 +11,6 @@
   }
 
   let { card = null, playable = false, dimmed = false, size = 'normal', onclick }: Props = $props();
-
-  function isRedSuit(suit: string) { return suit === '♥' || suit === '♦'; }
-
-  const SUIT_SKIN: Record<string, string> = { '♥': '🏻', '♦': '🏼', '♣': '🏾', '♠': '🏿' };
-
-  function centerSymbol(rank: string, suit: string): string {
-    if (suit === 'T') return rank;
-    const tone = SUIT_SKIN[suit] ?? '';
-    if (rank === 'K')  return `🤴${tone}`;
-    if (rank === 'Q')  return `👸${tone}`;
-    if (rank === 'Kn') return `🐴`;
-    if (rank === 'J')  return `💂${tone}`;
-    return suit;
-  }
 </script>
 
 {#snippet face()}
@@ -42,19 +29,24 @@
 
 {#if playable}
   <div
-    class="playing-card card-playable"
-    class:card-red={card && isRedSuit(card.suit)}
-    class:card-tarock={card?.suit === 'T'}
-    class:trick-card={size === 'trick'}
-    class:straw-card={size === 'straw'}
-    data-card-id={card ? `${card.suit}${card.rank}` : undefined}
-    data-flip-id={card ? `card-${card.suit}${card.rank}` : undefined}
+    class="card-lift-zone"
+    class:straw-zone={size === 'straw'}
     role="button"
     tabindex="0"
     {onclick}
     onkeydown={(e) => e.key === 'Enter' && onclick?.()}
   >
-    {@render face()}
+    <div
+      class="playing-card card-playable"
+      class:card-red={card && isRedSuit(card.suit)}
+      class:card-tarock={card?.suit === 'T'}
+      class:trick-card={size === 'trick'}
+      class:straw-card={size === 'straw'}
+      data-card-id={card ? `${card.suit}${card.rank}` : undefined}
+      data-flip-id={card ? `card-${card.suit}${card.rank}` : undefined}
+    >
+      {@render face()}
+    </div>
   </div>
 {:else}
   <div
@@ -73,6 +65,21 @@
 {/if}
 
 <style>
+  .card-lift-zone {
+    display: inline-flex;
+    flex-shrink: 0;
+    width: 70px;
+    height: 98px; /* 98px card + 18px hover buffer below */
+    align-items: flex-start;
+    overflow: visible;
+    cursor: pointer;
+  }
+
+  .card-lift-zone.straw-zone {
+    width: 65px;
+    height: 109px; /* 91px card + 18px hover buffer below */
+  }
+
   .playing-card {
     position: relative;
     display: inline-flex;
@@ -87,23 +94,25 @@
     font-family:  'Courier New', Courier, monospace;
     color: #1a1a2e;
     user-select: none;
-    top: 0;
     z-index: 0;
     overflow: hidden;
-    transition: top 0.12s ease, box-shadow 0.12s ease;
     flex-shrink: 0;
   }
 
   .playing-card.card-red    { color: #c0392b; }
   .playing-card.card-tarock { color: #6c3fbd; }
 
+  .card-lift-zone .card-playable {
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
+  }
+
   .playing-card.card-playable {
-    cursor: pointer;
     box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
     border-width: 2px;
   }
-  .playing-card.card-playable:hover {
-    top: -18px;
+
+  .card-lift-zone:hover .card-playable {
+    transform: translateY(-18px);
     box-shadow: 0 10px 24px rgba(0, 0, 0, 0.55);
   }
 

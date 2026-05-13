@@ -1,4 +1,5 @@
 import gsap from 'gsap';
+import { applyFaceUpToGhost } from '$lib/cardFaceUtils';
 
 export function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -130,17 +131,7 @@ export async function animatePileReveal(
   await onMidpoint();
 
   // Switch ghost to face-up appearance (still at 90°, so invisible during swap)
-  const isRed = card.suit === '♥' || card.suit === '♦';
-  ghost.style.background = '#f8f5ee';
-  ghost.style.border = '1px solid #bbb';
-  ghost.style.color = isRed ? '#c0392b' : card.suit === 'T' ? '#6c3fbd' : '#1a1a2e';
-  ghost.style.fontSize = '0.85rem';
-  ghost.style.fontWeight = '800';
-  ghost.style.fontFamily = 'Courier New, monospace';
-  ghost.style.display = 'flex';
-  ghost.style.alignItems = 'center';
-  ghost.style.justifyContent = 'center';
-  ghost.textContent = `${card.rank}${card.suit === 'T' ? '' : card.suit}`;
+  applyFaceUpToGhost(ghost, card);
 
   // Phase 2: rotate ghost from edge to face-up
   await new Promise<void>((r) =>
@@ -179,9 +170,6 @@ export function animateFlipReveal(
     'width:65px', 'height:91px', 'border-radius:7px',
     'background:#1a3464', 'border:1px solid #0f244a',
     `left:${pRect.left}px`, `top:${pRect.top}px`,
-    'display:flex', 'align-items:center', 'justify-content:center',
-    'font-size:0.85rem', 'font-weight:800', 'font-family:Courier New,monospace',
-    'color:#1a1a2e',
   ].join(';');
   document.body.appendChild(ghost);
 
@@ -224,11 +212,7 @@ export function animateFlipReveal(
       duration: 0.2,
       ease: 'power2.in',
       onComplete: () => {
-        const isRed = card.suit === '♥' || card.suit === '♦';
-        ghost.style.background = '#f8f5ee';
-        ghost.style.border = '1px solid #bbb';
-        ghost.style.color = isRed ? '#c0392b' : card.suit === 'T' ? '#6c3fbd' : '#1a1a2e';
-        ghost.textContent = `${card.rank}${card.suit === 'T' ? '' : card.suit}`;
+        applyFaceUpToGhost(ghost, card);
       },
     });
 
