@@ -10,9 +10,13 @@
     busy: boolean;
     onplay: (card: Card) => void;
     sortFn?: (a: Card, b: Card) => number;
+    // Discard mode: toggle-select up to 3 cards
+    discardMode?: boolean;
+    discardLegal?: Card[];
+    discardSelected?: Card[];
   }
 
-  let { cards, legalMoves, isMyTurn, busy, onplay, sortFn = whistSort }: Props = $props();
+  let { cards, legalMoves, isMyTurn, busy, onplay, sortFn = whistSort, discardMode = false, discardLegal = [], discardSelected = [] }: Props = $props();
 
   function sortHand(hand: Card[]): Card[] {
     return [...hand].sort(sortFn);
@@ -23,23 +27,49 @@
       (m) => m.type === "PLAY_CARD" && m.card.suit === card.suit && m.card.rank === card.rank
     );
   }
+
+  function isDiscardLegal(card: Card): boolean {
+    return discardLegal.some(c => c.suit === card.suit && c.rank === card.rank);
+  }
+
+  function isDiscardSelected(card: Card): boolean {
+    return discardSelected.some(c => c.suit === card.suit && c.rank === card.rank);
+  }
 </script>
 
 <div class="hand-section">
   <div class="hand-label">
-    {isMyTurn ? "Your turn — click a card to play" : "Your hand"}
+    {#if discardMode}
+      Select cards to discard
+    {:else}
+      {isMyTurn ? "Your turn — click a card to play" : "Your hand"}
+    {/if}
   </div>
   <div class="hand-cards">
     {#each sortHand(cards) as card (`${card.suit}${card.rank}`)}
-      {@const legal = isMyTurn && isLegal(card)}
-      <div class="card-wrap">
-        <PlayingCard
-          {card}
-          playable={legal}
-          dimmed={isMyTurn && !legal}
-          onclick={legal && !busy ? () => onplay(card) : undefined}
-        />
-      </div>
+      {#if discardMode}
+        {@const canDiscard = isDiscardLegal(card)}
+        {@const isSelected = isDiscardSelected(card)}
+        <div class="card-wrap">
+          <PlayingCard
+            {card}
+            playable={canDiscard}
+            dimmed={!canDiscard}
+            selected={isSelected}
+            onclick={canDiscard && !busy ? () => onplay(card) : undefined}
+          />
+        </div>
+      {:else}
+        {@const legal = isMyTurn && isLegal(card)}
+        <div class="card-wrap">
+          <PlayingCard
+            {card}
+            playable={legal}
+            dimmed={isMyTurn && !legal}
+            onclick={legal && !busy ? () => onplay(card) : undefined}
+          />
+        </div>
+      {/if}
     {/each}
   </div>
 </div>

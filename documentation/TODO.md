@@ -19,6 +19,7 @@ move validation + engine dispatch (`applyMove`), bot moves (ISMCTS internalActio
 Dealer rotation fixed for both games (random first dealer; rotate off `state.dealer`,
 not trick winner; eldest hand leads first trick).
 
+- [ ] REmove unused bots from the database.
 ---
 
 ## Phase 2: Web UI
@@ -46,6 +47,8 @@ so rapid server updates no longer drop intermediate states).
 - [ ] Perhaps add a table flag of "looking for players" to indicate anyone
       should join you and sit, or contrariwise a "private" to indicate they should
       not?
+- [ ] Add new logo
+- [ ] Make application responsive for mobile
 
 ### 2.1 Auth — Google login + magic link
 - [x] Magic link (Resend) — fully working; three-layer fix: `authResolving` guard blocks
@@ -112,6 +115,9 @@ Replace the inline username / edit / sign-out row in the header with a dropdown 
       opens an absolutely-positioned popover listing each option and its active value.
       Strohmandeln games now also default to Mayr scoring (backend `GAME_DEFAULT_SETTINGS`
       map seeds `createTable`; all `"Beck"` fallbacks corrected to `"Mayr"`).
+- [ ] Show the rulesset on the lobby tables as well
+- [ ] in the strohmandeln results view, show the card points by which the game was one or lost
+
 
 ### 2.9 Mid-game quit and kick
 
@@ -294,19 +300,21 @@ hands" without a structural change.
 - [ ] Add `defaultDirection` (`'clockwise' | 'counterclockwise'`) to `GAME_REGISTRY`;
       expose a direction toggle in the table UI. UI-only; controls seat-rotation and
       play-order display. Persist preference in `localStorage`.
+- [ ] Add a "deck choice" option [per game type] and save that from one game to the next.
 
 ### 5.1 Generalize components before adding new games (see Pre-5.x above)
 ### 5.2 Bondtolva
 ### 5.3 Dreier Tarock (54/42)
+- [ ] Add 42 card variation
+
 ### 5.4 Konigrufen (simple, Lungau, Upper Austrian)
 ### 5.5 Trappola
+### 5.6 Tournée Skat
 
 ---
 
 ## Deferred / Open Questions
 
-- **Auth**: real login (OAuth, magic link) deferred until the lobby is live and there
-  are actual users to protect
 - **Server/client boundary docs**: document that the console client and the web client
   are peers — both connect to Convex and receive the same event stream. Deferred now
   that the server exists; belongs in ARCHITECTURE.md.

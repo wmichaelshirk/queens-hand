@@ -6,11 +6,12 @@
     card?: Card | null;
     playable?: boolean;
     dimmed?: boolean;
+    selected?: boolean;   // permanently elevated (discard-toggle state)
     size?: 'normal' | 'trick' | 'straw';
     onclick?: () => void;
   }
 
-  let { card = null, playable = false, dimmed = false, size = 'normal', onclick }: Props = $props();
+  let { card = null, playable = false, dimmed = false, selected = false, size = 'normal', onclick }: Props = $props();
 </script>
 
 {#snippet face()}
@@ -40,6 +41,7 @@
       class="playing-card card-playable"
       class:card-red={card && isRedSuit(card.suit)}
       class:card-tarock={card?.suit === 'T'}
+      class:card-selected={selected}
       class:trick-card={size === 'trick'}
       class:straw-card={size === 'straw'}
       data-card-id={card ? `${card.suit}${card.rank}` : undefined}
@@ -107,13 +109,19 @@
   }
 
   .playing-card.card-playable {
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
-    border-width: 2px;
+    /* box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+    border-width: 2px; */
   }
 
-  .card-lift-zone:hover .card-playable {
+  .card-lift-zone:hover .card-playable,
+  .card-lift-zone .card-playable.card-selected {
     transform: translateY(-18px);
     box-shadow: 0 10px 24px rgba(0, 0, 0, 0.55);
+  }
+
+  .card-lift-zone .card-playable.card-selected {
+    border-color: #e94560;
+    box-shadow: 0 10px 24px rgba(233, 69, 96, 0.45);
   }
 
   .playing-card.card-dimmed {

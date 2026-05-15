@@ -1,4 +1,4 @@
-import type { Card, BareEvent, EngineResult } from '../types';
+import type { Card, BareEvent, DealEvent, EngineResult } from '../types';
 import type { ISMCTSEngine } from '../lib/engine';
 import { bipartiteMatch } from '../lib/matching';
 
@@ -174,6 +174,17 @@ function dealState({
     phase: 'playing',
     loseAt,
   };
+}
+
+function getDealEvents(dealerIndex: number, playerCount: number): DealEvent[] {
+  const deckSize = playerCount === 4 ? 32 : 30;
+  const cardsPerPlayer = deckSize / playerCount;
+  const eldestHand = (dealerIndex + 1) % playerCount;
+  const events: DealEvent[] = [];
+  for (let round = 0; round < cardsPerPlayer; round++)
+    for (let i = 0; i < playerCount; i++)
+      events.push({ type: 'DEAL', dealer: dealerIndex, to: (eldestHand + i) % playerCount, zone: 'hand', count: 1 });
+  return events;
 }
 
 const _clone: <T>(x: T) => T = typeof structuredClone === 'function'
@@ -453,7 +464,7 @@ export {
   // Card utilities
   createDeck, deckForPlayerCount, shuffle, cardEquals, isQueenOfClubs,
   // State lifecycle
-  dealState, cloneState,
+  dealState, getDealEvents, cloneState,
   // Queries
   getCurrentPlayer, getLegalMoves, isHandOver, isGameOver,
   getHandResult, getHandBreakdown, getGameResult,

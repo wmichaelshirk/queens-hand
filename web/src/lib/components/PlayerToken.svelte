@@ -14,6 +14,7 @@
   } = $props();
 
   const vertical = $derived(isVerticalSlot(slot));
+  const safeCardCount = $derived(Math.max(0, Math.floor(cardCount ?? 0)));
 </script>
 
 <div class="player-token" class:current-turn={isCurrentTurn} class:is-dealer={isDealer} class:vertical>
@@ -28,21 +29,21 @@
         {#if isDealer}<span class="dealer-chip">D</span>{/if}
       </div>
     </div>
-    <div class="card-stack vert left-stack" style="--n: {cardCount}">
-      {#if cardCount === 0}
+    <div class="card-stack vert left-stack" style="--n: {safeCardCount}">
+      {#if safeCardCount === 0}
         <span class="no-cards">—</span>
       {:else}
-        {#each Array(cardCount) as _}<PlayingCard />{/each}
+        {#each Array(safeCardCount) as _}<PlayingCard />{/each}
       {/if}
     </div>
 
   {:else if slot === 'right'}
     <!-- Cards first, then info on the outside-right, rotated +90° (reads top→bottom) -->
-    <div class="card-stack vert right-stack" style="--n: {cardCount}">
-      {#if cardCount === 0}
+    <div class="card-stack vert right-stack" style="--n: {safeCardCount}">
+      {#if safeCardCount === 0}
         <span class="no-cards">—</span>
       {:else}
-        {#each Array(cardCount) as _}<PlayingCard />{/each}
+        {#each Array(safeCardCount) as _}<PlayingCard />{/each}
       {/if}
     </div>
     <div class="info-wrap">
@@ -71,11 +72,11 @@
       {#if score !== undefined}<span class="token-score">{score}</span>{/if}
       {#if isDealer}<span class="dealer-chip">D</span>{/if}
     </div>
-    <div class="card-stack horiz" style="--n: {cardCount}">
-      {#if cardCount === 0}
+    <div class="card-stack horiz" style="--n: {safeCardCount}">
+      {#if safeCardCount === 0}
         <span class="no-cards">—</span>
       {:else}
-        {#each Array(cardCount) as _}<PlayingCard />{/each}
+        {#each Array(safeCardCount) as _}<PlayingCard />{/each}
       {/if}
     </div>
   {/if}

@@ -8,16 +8,12 @@
     convex, watchQuery,
   } from "$lib/convex";
   import { GAME_OPTIONS, GAME_REGISTRY } from "$lib/gameConfig";
-  import type { Card, Move, StrawmanPileInfo, AnimEvent } from "$lib/gameTypes";
-  import PlayingCard from "$lib/components/PlayingCard.svelte";
-  import HandCards from "$lib/components/HandCards.svelte";
-  import { whistSort, tarockSort } from "$lib/cardSort";
-  import Trick from "$lib/components/Trick.svelte";
-  import Pile from "$lib/components/Pile.svelte";
-  import PlayerToken from "$lib/components/PlayerToken.svelte";
+  import type { Card, Move, StrawmanPileInfo, AnimEvent, GameState } from "$lib/gameTypes";
   import HandResultModal from "$lib/components/HandResultModal.svelte";
-  import { getSlotForSeat } from "$lib/tableLayout";
-  import { animatePlayedCard, animateTrickToWinner, animateFlipReveal, animatePileReveal, animateCardArrive, wait } from "$lib/cardAnimations";
+  import GameTableSlobberhannes from "$lib/components/GameTableSlobberhannes.svelte";
+  import GameTableStrohmandeln from "$lib/components/GameTableStrohmandeln.svelte";
+  import GameTableDreiertarock from "$lib/components/GameTableDreiertarock.svelte";
+  import { animatePlayedCard, animateTrickToWinner, animateFlipReveal, animatePileReveal, animateCardArrive, animateDeal, wait } from "$lib/cardAnimations";
 
   const gameId = $derived($page.params.gameId);
 
@@ -122,51 +118,6 @@
 
   // ── Game state (active game) ───────────────────────────────────────────────────
 
-  type GameSeat = {
-    seatIndex: number;
-    playerId: string;
-    displayName: string;
-    isBot: boolean;
-    enginePlayerIndex: number;
-    handSize: number;
-  };
-
-  type GamePublicState = {
-    currentTrick: { playerIndex: number; card: { suit: string; rank: string } }[];
-    scores: number[];
-    currentTurn: number;
-    dealer: number;
-    trickNum: number;
-    phase: string;
-    lastCompletedTrick: { plays: { playerIndex: number; card: { suit: string; rank: string } }[]; winner: number } | null;
-    recentEvents: AnimEvent[];
-  };
-
-  type ContinuationState = {
-    votes: Record<string, "continue" | "quit">;
-    myVote: "continue" | "quit" | null;
-  };
-
-  type HandSummary = {
-    deltas: { player: number; delta: number; reason: string }[];
-    runningTotals: number[];
-    seatNames: string[];
-    breakdown: { player: number; role: string | null; items: { label: string; delta: number }[]; total: number }[] | null;
-    gameTarget: number | null;
-    losers: number[] | null;
-  };
-
-  type GameState = {
-    publicState: GamePublicState;
-    myHand: Card[];
-    legalMoves: Move[];
-    seats: GameSeat[];
-    gameType: string;
-    strawmen: StrawmanPileInfo[][] | null;  // [enginePlayerIndex][pileIndex], Strohmandeln only
-    continuation: ContinuationState | null;
-    lastHandSummary: HandSummary | null;
-  } | null;
-
   const gameState = watchQuery<GameState>(
     "games:getMyGameState" as any,
     { gameId, guestUserId: $guestSession?.userId }
@@ -186,8 +137,19 @@
 
   $effect(() => {
     if ($gameState && !displayState) {
-      displayState = $gameState;
-      _lastEventKey = JSON.stringify($gameState.publicState.recentEvents);
+      const currentKey = JSON.stringify($gameState.publicState.recentEvents);
+      const storedKey = browser
+        ? (sessionStorage.getItem(`animKey:${gameId}`) ?? '')
+        : currentKey;
+      if (storedKey === currentKey) {
+        // Mid-session refresh: these events were already animated, skip them.
+        displayState = $gameState;
+        _lastEventKey = currentKey;
+      } else {
+        // First load: reconstruct pre-animation state so piles start face-down.
+        displayState = _preAnimationState($gameState);
+        // Don't set _lastEventKey — Effect 2 will animate.
+      }
     }
   });
 
@@ -196,35 +158,79 @@
     myEngineIndex >= 0 && $gameState?.publicState.currentTurn === myEngineIndex
   );
 
-  // Separate card-play moves (handled by clicking hand) from bid/announce moves
-  const nonCardMoves = $derived(
-    (displayState?.legalMoves ?? []).filter((m) => m.type !== "PLAY_CARD")
+  // ── Page-level move dialogs ────────────────────────────────────────────────────
+
+  // "Choice" dialog: single-select (bidding, contract choice).
+  // "Declaration" dialog: multi-select (declaring phase announcements + kontras).
+  // Both read from live $gameState so they appear as soon as it's your turn,
+  // not after animations finish (isMyTurn gates submission, not display).
+
+  const CHOICE_TYPES     = new Set(['MAKE_BID', 'PASS_BID', 'CHOOSE_CONTRACT']);
+  const DECLARING_TYPES  = new Set(['MAKE_ANNOUNCEMENT', 'KONTRA', 'PASS_ANNOUNCEMENT']);
+
+  const showChoiceDialog = $derived(
+    isMyTurn &&
+    ($gameState?.legalMoves ?? []).some(m => CHOICE_TYPES.has(m.type))
   );
 
-  const seatSlots = $derived(
-    $gameState
-      ? $gameState.seats.map(s => ({
-          ...s,
-          slot: getSlotForSeat(
-            myEngineIndex >= 0 ? myEngineIndex : 0,
-            s.enginePlayerIndex,
-            $gameState!.seats.length
-          ),
-        }))
-      : []
+  const showDeclarationDialog = $derived(
+    isMyTurn &&
+    ($gameState?.legalMoves ?? []).some(m => DECLARING_TYPES.has(m.type))
   );
 
-  const topRowSeats = $derived(
-    seatSlots
-      .filter(s => s.slot === 'top' || s.slot === 'top-left' || s.slot === 'top-right')
-      .sort((a, b) => {
-        const order: Record<string, number> = { 'top-left': 0, 'top': 1, 'top-right': 2 };
-        return (order[a.slot] ?? 1) - (order[b.slot] ?? 1);
-      })
+  // Choices available in the choice dialog (bidding / contract choice moves).
+  const choiceMoves = $derived(
+    ($gameState?.legalMoves ?? []).filter(m => CHOICE_TYPES.has(m.type))
   );
-  const leftSeats     = $derived(seatSlots.filter(s => s.slot === 'left'));
-  const rightSeats    = $derived(seatSlots.filter(s => s.slot === 'right'));
-  const myBottomSeat  = $derived(seatSlots.find(s => s.slot === 'bottom'));
+
+  // Individual options available in the declaration dialog.
+  const declarationOptions = $derived(
+    ($gameState?.legalMoves ?? []).filter(m => m.type === 'MAKE_ANNOUNCEMENT' || m.type === 'KONTRA')
+  );
+
+  let selectedDeclarations = $state<Array<{ type: 'MAKE_ANNOUNCEMENT'; announcement: string } | { type: 'KONTRA'; target: string }>>([]);
+
+  $effect(() => {
+    // Reset selections whenever the dialog appears fresh (different legal moves).
+    if (showDeclarationDialog) selectedDeclarations = [];
+  });
+
+  function toggleDeclaration(move: Move) {
+    if (move.type !== 'MAKE_ANNOUNCEMENT' && move.type !== 'KONTRA') return;
+    const key = move.type === 'MAKE_ANNOUNCEMENT' ? `ann:${move.announcement}` : `k:${move.target}`;
+    const existing = selectedDeclarations.findIndex(d =>
+      (d.type === 'MAKE_ANNOUNCEMENT' && move.type === 'MAKE_ANNOUNCEMENT' && d.announcement === move.announcement) ||
+      (d.type === 'KONTRA' && move.type === 'KONTRA' && d.target === move.target)
+    );
+    if (existing >= 0) {
+      selectedDeclarations = selectedDeclarations.filter((_, i) => i !== existing);
+    } else {
+      selectedDeclarations = [...selectedDeclarations, move as { type: 'MAKE_ANNOUNCEMENT'; announcement: string } | { type: 'KONTRA'; target: string }];
+    }
+  }
+
+  function isSelected(move: Move): boolean {
+    if (move.type === 'MAKE_ANNOUNCEMENT')
+      return selectedDeclarations.some(d => d.type === 'MAKE_ANNOUNCEMENT' && d.announcement === move.announcement);
+    if (move.type === 'KONTRA')
+      return selectedDeclarations.some(d => d.type === 'KONTRA' && d.target === move.target);
+    return false;
+  }
+
+  function submitDeclaration() {
+    playMove({ type: 'SUBMIT_DECLARATION', actions: selectedDeclarations });
+  }
+
+  function moveLabel(move: Move): string {
+    if (move.type === 'MAKE_BID') return move.bid;
+    if (move.type === 'PASS_BID') return 'Pass';
+    if (move.type === 'PASS_ANNOUNCEMENT') return 'Pass';
+    if (move.type === 'MAKE_ANNOUNCEMENT') return move.announcement;
+    if (move.type === 'CHOOSE_CONTRACT') return move.contract;
+    if (move.type === 'CHOOSE_TALON') return move.choice === 'first' ? 'First Half' : 'Second Half';
+    if (move.type === 'KONTRA') return move.target === 'game' ? 'Kontra' : `Kontra: ${move.target}`;
+    return '?';
+  }
 
   let showHandSummary = $state(false);
   let lastShownSummaryKey = $state<string | null>(null);
@@ -263,13 +269,84 @@
     void runAnimations(incoming);
   });
 
+  // Reconstruct the game state as it was before the initial strawman uncovering,
+  // so that piles animate from face-down rather than starting in their final state.
+  function _preAnimationState(gs: NonNullable<GameState>): NonNullable<GameState> {
+    const events = gs.publicState.recentEvents ?? [];
+
+    // If deal events are present, we're animating from an empty state.
+    if (events.some(e => e.type === 'DEAL')) {
+      const strawmen = gs.strawmen?.map(pp => pp.map(() => ({ depth: 0, topCard: null }))) ?? null;
+      const seats = gs.seats.map(s => ({ ...s, handSize: 0 }));
+      return { ...gs, myHand: [], strawmen, seats };
+    }
+
+    // Otherwise reconstruct pre-uncover state from CARD_REVEALED / CARDS_MOVED only.
+    const pileDepthInc = new Map<string, number>();
+    const cascadedCards = new Set<string>();
+    const revealedPiles = new Set<string>();
+
+    for (const ev of events) {
+      if (ev.type === 'CARD_REVEALED') revealedPiles.add(`${ev.player}-${ev.pile}`);
+      if (ev.type === 'CARDS_MOVED') {
+        for (const t of ev.transfers) {
+          if (t.from.zone === 'strawman') {
+            const k = `${t.from.player}-${t.from.pile}`;
+            pileDepthInc.set(k, (pileDepthInc.get(k) ?? 0) + 1);
+            cascadedCards.add(`${t.card.suit}${t.card.rank}`);
+          }
+        }
+      }
+    }
+
+    if ((pileDepthInc.size === 0 && revealedPiles.size === 0) || !gs.strawmen) return gs;
+
+    const strawmen = gs.strawmen.map((playerPiles, pi) =>
+      playerPiles.map((pile, li) => {
+        const k = `${pi}-${li}`;
+        if (revealedPiles.has(k) || pileDepthInc.has(k)) {
+          return { depth: pile.depth + (pileDepthInc.get(k) ?? 0), topCard: null };
+        }
+        return pile;
+      })
+    );
+    const myHand = gs.myHand.filter(c => !cascadedCards.has(`${c.suit}${c.rank}`));
+    return { ...gs, myHand, strawmen };
+  }
+
   async function runAnimations(toState: NonNullable<GameState>) {
     _animRunning = true;
     try {
       await animateEventSequence(toState.publicState.recentEvents, toState);
     } finally {
-      displayState = toState;
+      // Set displayState to toState, but suppress topCard for any pile where:
+      //   (a) the animation just left topCard=null (card was played from that pile), AND
+      //   (b) toState already shows the new card, AND
+      //   (c) no CARD_REVEALED arrived in this batch.
+      // Without this, the new pile top would flash visible between moves when the reveal
+      // was deferred to the next trick (deferredPileReveal engine fix).
+      const eventsInBatch = toState.publicState.recentEvents ?? [];
+      const revealsInBatch = new Set(
+        eventsInBatch
+          .filter((e): e is Extract<AnimEvent, { type: 'CARD_REVEALED' }> => e.type === 'CARD_REVEALED')
+          .map(e => `${e.player}-${e.pile}`),
+      );
+      if (displayState?.strawmen && toState.strawmen) {
+        const strawmen = toState.strawmen.map((pp, pi) =>
+          pp.map((pile, li) =>
+            pile.topCard != null &&
+            displayState!.strawmen![pi]?.[li]?.topCard == null &&
+            !revealsInBatch.has(`${pi}-${li}`)
+              ? displayState!.strawmen![pi]![li]!   // preserve depth from post-CARD_PLAYED state
+              : pile,
+          ),
+        );
+        displayState = { ...toState, strawmen };
+      } else {
+        displayState = toState;
+      }
       _animRunning = false;
+      if (browser) sessionStorage.setItem(`animKey:${gameId}`, _lastEventKey);
       if (_pendingQueue.length > 0) {
         void runAnimations(_pendingQueue.shift()!);
       }
@@ -279,6 +356,13 @@
   async function animateEventSequence(events: AnimEvent[], toState: NonNullable<GameState>) {
     // Piles whose CARD_REVEALED already spawned animateFlipReveal — skip in CARDS_MOVED.
     const animatedPiles = new Set<string>();
+    // Tracks how many cards have been dealt to me so far, for slicing toState.myHand.
+    let myDealtToMe = 0;
+
+    // Reset displayState to pre-deal appearance before any DEAL animation fires.
+    if (events.some(e => e.type === 'DEAL')) {
+      displayState = _preAnimationState(toState);
+    }
 
     function willMoveToHand(fromIdx: number, player: number, pile: number): boolean {
       return events.slice(fromIdx + 1).some(
@@ -294,7 +378,33 @@
     for (let i = 0; i < events.length; i++) {
       const ev = events[i]!;
 
-      if (ev.type === 'CARD_PLAYED') {
+      if (ev.type === 'DEAL') {
+        await animateDeal(ev.dealer, ev.to, ev.zone, ev.pile ?? 0, ev.count);
+        if (ev.zone === 'hand') {
+          const updatedSeats = displayState!.seats.map(s =>
+            s.enginePlayerIndex === ev.to ? { ...s, handSize: s.handSize + ev.count } : s
+          );
+          if (ev.to === myEngineIndex) {
+            const arrived = toState.myHand.slice(myDealtToMe, myDealtToMe + ev.count);
+            myDealtToMe += ev.count;
+            displayState = { ...displayState!, myHand: [...displayState!.myHand, ...arrived], seats: updatedSeats };
+            await tick();
+            for (const c of arrived) animateCardArrive(myEngineIndex, c);
+          } else {
+            displayState = { ...displayState!, seats: updatedSeats };
+          }
+        } else if (ev.zone === 'strawman' && displayState!.strawmen) {
+          const strawmen = displayState!.strawmen.map((pp, pi) =>
+            pi === ev.to
+              ? pp.map((pile, li) =>
+                  li === (ev.pile ?? 0) ? { ...pile, depth: pile.depth + ev.count } : pile
+                )
+              : pp
+          );
+          displayState = { ...displayState!, strawmen };
+        }
+
+      } else if (ev.type === 'CARD_PLAYED') {
         // Capture card position before displayState updates — check hand first, then pile
         const flipId = `card-${ev.card.suit}${ev.card.rank}`;
         const handCardEl = document.querySelector(
@@ -325,6 +435,9 @@
         // Advance displayState: card moves from hand/pile to trick
         displayState = {
           ...displayState!,
+          seats: displayState!.seats.map(s =>
+            s.enginePlayerIndex === ev.player ? { ...s, handSize: s.handSize - 1 } : s
+          ),
           myHand: ev.player === myEngineIndex
             ? displayState!.myHand.filter(
                 c => !(c.suit === ev.card.suit && c.rank === ev.card.rank),
@@ -370,6 +483,21 @@
       } else if (ev.type === 'CARD_REVEALED') {
         const k = `${ev.player}-${ev.pile}`;
 
+        // When a pile-led card's reveal was deferred to the next move, displayState was
+        // set to toState at the end of that prior move — making the new topCard visible
+        // before this animation runs. Reset to null so the flip starts from face-down.
+        if (displayState!.strawmen?.[ev.player]?.[ev.pile]?.topCard != null) {
+          displayState = {
+            ...displayState!,
+            strawmen: displayState!.strawmen!.map((pp, pi) =>
+              pi === ev.player
+                ? pp.map((pile, li) => li === ev.pile ? { ...pile, topCard: null } : pile)
+                : pp
+            ),
+          };
+          await tick();
+        }
+
         if (willMoveToHand(i, ev.player, ev.pile)) {
           // T/K cascade: ghost flips and slides to hand.
           // displayState.topCard stays null — card never "appears" in pile.
@@ -405,12 +533,33 @@
           }
         }
 
-        // Sync hand and pile state from toState after all transfers animated
-        displayState = {
-          ...displayState!,
-          myHand: toState.myHand,
-          strawmen: toState.strawmen,
-        };
+        // Sync hand and pile state. For strawman cascades use incremental
+        // update so intermediate animation frames show correct pile depths.
+        const hasStrawman = ev.transfers.some(t => t.from.zone === 'strawman');
+        if (hasStrawman && displayState!.strawmen) {
+          const strawmen = displayState!.strawmen.map((playerPiles, pi) =>
+            playerPiles.map((pile, li) => {
+              const n = ev.transfers.filter(
+                t => t.from.zone === 'strawman' && t.from.player === pi && t.from.pile === li
+              ).length;
+              return n > 0 ? { ...pile, depth: Math.max(0, pile.depth - n) } : pile;
+            })
+          );
+          const addedToMyHand = ev.transfers
+            .filter(t => t.from.zone === 'strawman' && t.to.zone === 'hand' && t.to.player === myEngineIndex)
+            .map(t => t.card);
+          displayState = {
+            ...displayState!,
+            myHand: [...displayState!.myHand, ...addedToMyHand],
+            strawmen,
+          };
+        } else {
+          displayState = {
+            ...displayState!,
+            myHand: toState.myHand,
+            strawmen: toState.strawmen,
+          };
+        }
 
         // Fade in newly arrived hand cards
         await tick();
@@ -431,18 +580,6 @@
         };
       }
     }
-  }
-
-  function moveLabel(move: Move): string {
-    if (move.type === "PLAY_CARD") return `${move.card.rank}${move.card.suit}`;
-    if (move.type === "MAKE_BID") return move.bid;
-    if (move.type === "PASS_BID") return "Pass";
-    if (move.type === "MAKE_ANNOUNCEMENT") return move.announcement;
-    return "?";
-  }
-
-  function seatName(engineIndex: number): string {
-    return $gameState?.seats.find((s) => s.enginePlayerIndex === engineIndex)?.displayName ?? `Player ${engineIndex + 1}`;
   }
 
   async function playMove(move: Move) {
@@ -589,13 +726,28 @@
 
   type TableMsg = { _id: string; playerId: string; displayName: string; text: string; ts: number };
 
-  const messages = watchQuery<TableMsg[]>("games:getTableMessages" as any, { gameId });
-
+  let localMessages = $state<TableMsg[]>([]);
+  let sinceTs = $state(Date.now());
   let chatText = $state("");
   let chatEl = $state<HTMLDivElement | undefined>(undefined);
 
+  // Re-subscribes each time sinceTs advances so each delivery contains only new messages.
   $effect(() => {
-    if ($messages && chatEl) chatEl.scrollTop = chatEl.scrollHeight;
+    const unsub = convex.onUpdate(
+      "games:getTableMessages" as any,
+      { gameId, sinceTs },
+      (newMsgs: TableMsg[]) => {
+        if (newMsgs.length > 0) {
+          localMessages = [...localMessages, ...newMsgs];
+          sinceTs = newMsgs[newMsgs.length - 1].ts;
+        }
+      }
+    );
+    return unsub;
+  });
+
+  $effect(() => {
+    if (localMessages.length > 0 && chatEl) chatEl.scrollTop = chatEl.scrollHeight;
   });
 
   async function sendMessage() {
@@ -832,153 +984,62 @@
               />
             {/if}
 
-            <!-- Three-row table layout -->
-              <div class="table-layout">
-
-                <!-- Row 1: top players (0–3), horizontal -->
-                {#if topRowSeats.length > 0}
-                  <div class="top-row">
-                    {#each topRowSeats as seat (seat.seatIndex)}
-                      <div data-player-token={seat.enginePlayerIndex}>
-                        <PlayerToken
-                          name={seat.displayName}
-                          isBot={seat.isBot}
-                          cardCount={seat.handSize}
-                          slot={seat.slot}
-                          score={displayState.publicState.scores[seat.enginePlayerIndex] ?? 0}
-                          isCurrentTurn={seat.enginePlayerIndex === displayState.publicState.currentTurn}
-                          isDealer={seat.enginePlayerIndex === displayState.publicState.dealer}
-                        />
-                      </div>
-                    {/each}
-                  </div>
-                {/if}
-
-                <!-- Row 2: left side | table center | right side -->
-                <div class="middle-row">
-                  <div class="side-left">
-                    {#each leftSeats as seat (seat.seatIndex)}
-                      <div data-player-token={seat.enginePlayerIndex}>
-                        <PlayerToken
-                          name={seat.displayName}
-                          isBot={seat.isBot}
-                          cardCount={seat.handSize}
-                          slot="left"
-                          score={displayState.publicState.scores[seat.enginePlayerIndex] ?? 0}
-                          isCurrentTurn={seat.enginePlayerIndex === displayState.publicState.currentTurn}
-                          isDealer={seat.enginePlayerIndex === displayState.publicState.dealer}
-                        />
-                      </div>
-                    {/each}
-                  </div>
-
-                  <div class="table-center">
-                    {#if displayState.strawmen}
-                      {@const opponentEngineIdx = myEngineIndex === 0 ? 1 : 0}
-                      {@const opponentPiles = displayState.strawmen[opponentEngineIdx] ?? []}
-                      <div class="strawmen-piles">
-                        {#each opponentPiles as pile, i (i)}
-                          <Pile {pile} playerIndex={opponentEngineIdx} pileIndex={i} />
-                        {/each}
-                      </div>
-                    {/if}
-                    <Trick
-                      trick={displayState.publicState.currentTrick}
-                      lastCompletedTrick={null}
-                      trickNum={displayState.publicState.trickNum}
-                      {seatName}
-                      seatSlot={(engineIdx) => getSlotForSeat(
-                        myEngineIndex >= 0 ? myEngineIndex : 0,
-                        engineIdx,
-                        displayState!.seats.length
-                      )}
-                    />
-                  </div>
-
-                  <div class="side-right">
-                    {#each rightSeats as seat (seat.seatIndex)}
-                      <div data-player-token={seat.enginePlayerIndex}>
-                        <PlayerToken
-                          name={seat.displayName}
-                          isBot={seat.isBot}
-                          cardCount={seat.handSize}
-                          slot="right"
-                          score={displayState.publicState.scores[seat.enginePlayerIndex] ?? 0}
-                          isCurrentTurn={seat.enginePlayerIndex === displayState.publicState.currentTurn}
-                          isDealer={seat.enginePlayerIndex === displayState.publicState.dealer}
-                        />
-                      </div>
+            <!-- Choice dialog: single-select (bidding / contract choice) -->
+            {#if showChoiceDialog}
+              <div class="move-dialog-overlay">
+                <div class="move-dialog">
+                  <div class="move-dialog-title">Choose your action</div>
+                  <div class="move-dialog-grid">
+                    {#each choiceMoves as move, i (i)}
+                      <button
+                        class="move-dialog-btn"
+                        class:pass={move.type === 'PASS_BID'}
+                        onclick={() => playMove(move)}
+                        disabled={busy}
+                      >
+                        {moveLabel(move)}
+                      </button>
                     {/each}
                   </div>
                 </div>
+              </div>
+            {/if}
 
-                <!-- Row 3: current player -->
-                <div class="bottom-row">
-                  {#if myBottomSeat}
-                    <div data-player-token={myBottomSeat.enginePlayerIndex}>
-                      <PlayerToken
-                        name={myBottomSeat.displayName}
-                        isBot={myBottomSeat.isBot}
-                        cardCount={0}
-                        slot="bottom"
-                        score={displayState.publicState.scores[myBottomSeat.enginePlayerIndex] ?? 0}
-                        isCurrentTurn={isMyTurn}
-                        isDealer={myBottomSeat.enginePlayerIndex === displayState.publicState.dealer}
-                      />
-                    </div>
-                  {/if}
-
-                  {#if displayState.strawmen}
-                    {@const myPiles = displayState.strawmen[myEngineIndex] ?? []}
-                    <div class="strawmen-piles">
-                      {#each myPiles as pile, i (i)}
-                        {@const topCard = pile.topCard}
-                        {@const pilePlayable = isMyTurn && !!topCard && (displayState.legalMoves ?? []).some(
-                          m => m.type === 'PLAY_CARD' && m.card.suit === topCard.suit && m.card.rank === topCard.rank
-                        )}
-                        <Pile
-                          {pile}
-                          playable={pilePlayable}
-                          dimmed={isMyTurn && !pilePlayable}
-                          onclick={pilePlayable && !busy && topCard
-                            ? () => playMove({ type: 'PLAY_CARD', card: topCard })
-                            : undefined}
-                          playerIndex={myEngineIndex}
-                          pileIndex={i}
-                        />
+            <!-- Declaration dialog: multi-select (declaring phase) -->
+            {#if showDeclarationDialog}
+              <div class="move-dialog-overlay">
+                <div class="move-dialog">
+                  <div class="move-dialog-title">Announce / Kontra</div>
+                  {#if declarationOptions.length > 0}
+                    <div class="declaration-options">
+                      {#each declarationOptions as move, i (i)}
+                        <label class="declaration-option" class:selected={isSelected(move)}>
+                          <input
+                            type="checkbox"
+                            checked={isSelected(move)}
+                            onchange={() => toggleDeclaration(move)}
+                          />
+                          <span>{moveLabel(move)}</span>
+                        </label>
                       {/each}
                     </div>
+                  {:else}
+                    <p class="declaration-empty">Nothing to announce.</p>
                   {/if}
-
-                  {#if isMyTurn && nonCardMoves.length > 0}
-                    <div class="move-section">
-                      <div class="move-prompt">Choose your action:</div>
-                      <div class="move-grid">
-                        {#each nonCardMoves as move, i (i)}
-                          <button class="move-btn" onclick={() => playMove(move)} disabled={busy}>
-                            {moveLabel(move)}
-                          </button>
-                        {/each}
-                      </div>
-                    </div>
-                  {/if}
-
-                  <div data-hand-area={myEngineIndex}>
-                    {#if displayState.myHand.length > 0}
-                      <HandCards
-                        cards={displayState.myHand}
-                        legalMoves={displayState.legalMoves}
-                        isMyTurn={isMyTurn}
-                        {busy}
-                        onplay={(card) => playMove({ type: 'PLAY_CARD', card })}
-                        sortFn={$tableData.gameType === 'strohmandeln' ? tarockSort : whistSort}
-                      />
-                    {/if}
-                  </div>
+                  <button class="move-dialog-submit" onclick={submitDeclaration} disabled={busy}>
+                    {selectedDeclarations.length === 0 ? 'Pass' : `Submit (${selectedDeclarations.length})`}
+                  </button>
                 </div>
-
               </div>
+            {/if}
 
+            {#if displayState.gameType === 'slobberhannes'}
+              <GameTableSlobberhannes {displayState} {myEngineIndex} {isMyTurn} {busy} onPlayMove={playMove} />
+            {:else if displayState.gameType === 'strohmandeln'}
+              <GameTableStrohmandeln {displayState} {myEngineIndex} {isMyTurn} {busy} onPlayMove={playMove} />
+            {:else if displayState.gameType === 'dreiertarock'}
+              <GameTableDreiertarock {displayState} {myEngineIndex} {isMyTurn} {busy} onPlayMove={playMove} />
+            {/if}
           {:else}
             <p class="muted centered">Loading game…</p>
           {/if}
@@ -1066,8 +1127,8 @@
       <section class="sidebar-section chat-section">
         <h3 class="label">Table chat</h3>
         <div class="messages" bind:this={chatEl}>
-          {#if $messages && $messages.length > 0}
-            {#each $messages as msg (msg._id)}
+          {#if localMessages.length > 0}
+            {#each localMessages as msg (msg._id)}
               <div class="msg" class:own={msg.playerId === currentPlayer?._id}>
                 <span class="msg-name">{msg.displayName}</span>
                 <span class="msg-text">{msg.text}</span>
@@ -1530,137 +1591,8 @@
     min-height: 0;
     width: 100%;
     max-width: 820px;
+    position: relative;
   }
-
-  /* ── Three-row table layout ──────────────────────────────────────────────── */
-  .table-layout {
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    flex: 1;
-    width: 100%;
-  }
-
-  /* Row 1: top players, displayed horizontally with spacing */
-  .top-row {
-    display: flex;
-    justify-content: center;
-    gap: 3rem;
-  }
-
-  /* Row 2: left side | center table | right side */
-  .middle-row {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    flex: 1;
-    width: 100%;
-  }
-
-  .side-left {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    justify-content: center;
-    gap: 1.5rem;
-    flex-shrink: 0;
-  }
-
-  .table-center {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 1rem;
-    min-width: 0;
-  }
-
-  .side-right {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    justify-content: center;
-    gap: 1.5rem;
-    flex-shrink: 0;
-  }
-
-  /* Row 3: current player — always full width */
-  .bottom-row {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 1rem;
-    width: 100%;
-  }
-
-
-
-  /* ── Strawman piles (Strohmandeln) ───────────────────────────────────────── */
-  .strawmen-row {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-    align-items: center;
-  }
-
-  .strawmen-label {
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: #555;
-  }
-
-  .strawmen-piles {
-    display: flex;
-    gap: 0.75rem;
-    justify-content: center;
-    flex-wrap: wrap;
-  }
-
-  .straw-pile {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.25rem;
-  }
-
-
-  .move-section {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-    align-items: center;
-  }
-
-  .move-prompt {
-    font-size: 0.8rem;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    color: #666;
-  }
-
-  .move-grid {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    justify-content: center;
-  }
-
-  .move-btn {
-    background: #0f3460;
-    border: 1px solid #1a4a80;
-    border-radius: 6px;
-    color: #e0e0e0;
-    padding: 0.5rem 0.75rem;
-    font-size: 0.95rem;
-    font-weight: 600;
-    cursor: pointer;
-    min-width: 52px;
-    text-align: center;
-  }
-  .move-btn:hover:not(:disabled) { background: #1a5a90; border-color: #e94560; }
-  .move-btn:disabled { opacity: 0.45; cursor: default; }
 
   /* ── Sidebar ─────────────────────────────────────────────────────────────── */
   .sidebar {
@@ -1857,4 +1789,105 @@
   }
 
   .centered { text-align: center; }
+
+  /* ── Move dialogs (choice + declaration overlays) ────────────────────────── */
+  .move-dialog-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    pointer-events: none;
+  }
+
+  .move-dialog {
+    background: #12192e;
+    border: 1px solid #1a4a80;
+    border-radius: 12px;
+    padding: 1.25rem 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    min-width: 240px;
+    max-width: 380px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+    pointer-events: all;
+  }
+
+  .move-dialog-title {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: #666;
+    text-align: center;
+  }
+
+  .move-dialog-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    justify-content: center;
+  }
+
+  .move-dialog-btn {
+    background: #0f3460;
+    border: 1px solid #1a4a80;
+    border-radius: 6px;
+    color: #e0e0e0;
+    padding: 0.5rem 0.9rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    min-width: 60px;
+    text-align: center;
+  }
+  .move-dialog-btn:hover:not(:disabled) { background: #1a5a90; border-color: #e94560; }
+  .move-dialog-btn:disabled { opacity: 0.45; cursor: default; }
+  .move-dialog-btn.pass { color: #888; border-color: #1a3060; }
+  .move-dialog-btn.pass:hover:not(:disabled) { color: #ccc; }
+
+  .declaration-options {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+
+  .declaration-option {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.45rem 0.6rem;
+    border-radius: 6px;
+    border: 1px solid #1a3060;
+    cursor: pointer;
+    font-size: 0.9rem;
+    color: #ccc;
+    transition: border-color 0.12s, background 0.12s;
+  }
+  .declaration-option:hover { border-color: #2a5090; background: #0d1e38; }
+  .declaration-option.selected { border-color: #e94560; background: #1e0a18; color: #fff; }
+  .declaration-option input[type="checkbox"] { accent-color: #e94560; width: 15px; height: 15px; }
+
+  .declaration-empty {
+    font-size: 0.82rem;
+    color: #555;
+    font-style: italic;
+    text-align: center;
+    margin: 0;
+  }
+
+  .move-dialog-submit {
+    background: #e94560;
+    border: 1px solid #e94560;
+    border-radius: 6px;
+    color: #fff;
+    padding: 0.55rem 1rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    text-align: center;
+  }
+  .move-dialog-submit:hover:not(:disabled) { background: #c73652; }
+  .move-dialog-submit:disabled { opacity: 0.45; cursor: default; }
 </style>

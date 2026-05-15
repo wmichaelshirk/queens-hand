@@ -25,7 +25,7 @@ convex/schema.ts           — Full Convex schema (source of truth for all colle
 convex/lobby.ts            — Presence heartbeat + lobby chat mutations/queries
 convex/auth.ts             — Convex Auth config
 convex/http.ts             — HTTP router (auth routes only)
-web/                       — SvelteKit frontend (Cloudflare Pages)
+web/                       — SvelteKit frontend (Vercel)
 index.ts                   — CLI client (thin; talks to Convex)
 benchmark.ts               — Full ISMCTS vs Greedy benchmark
 benchmark_straw.ts         — Strohmandeln-specific benchmark
@@ -108,7 +108,7 @@ human leaderboard.
 
 ## Constraints
 
-- Free tier only: Convex free tier (1 GB), Cloudflare Pages free tier
+- Free tier only: Convex free tier (1 GB), Vercel free tier
 - No credit card anywhere
 - Node ≥ 18
 - TypeScript strict mode — `tsc --noEmit` must pass before any PR

@@ -8,6 +8,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
 import * as Slobberhannes from "../engines/slobberhannes";
 import * as Strohmandeln from "../engines/strohmandeln";
+import * as Dreiertarock from "../engines/dreiertarock";
 import { chooseMove } from "../ai/ismcts";
 import type { Move, Card, BareEvent } from "../types";
 
@@ -19,17 +20,49 @@ function movesEqual(a: Move, b: Move): boolean {
   if (a.type === "PASS_BID") return true;
   if (a.type === "MAKE_ANNOUNCEMENT" && b.type === "MAKE_ANNOUNCEMENT")
     return a.announcement === b.announcement;
+  if (a.type === "PASS_ANNOUNCEMENT") return true;
+  if (a.type === "CHOOSE_CONTRACT" && b.type === "CHOOSE_CONTRACT")
+    return a.contract === b.contract;
+  if (a.type === "CHOOSE_TALON" && b.type === "CHOOSE_TALON")
+    return a.choice === b.choice;
+  if (a.type === "DISCARD_CARD" && b.type === "DISCARD_CARD")
+    return a.card.suit === b.card.suit && a.card.rank === b.card.rank;
+  if (a.type === "KONTRA" && b.type === "KONTRA")
+    return a.target === b.target;
   return false;
+}
+
+function isLegalMove(legalMoves: Move[], move: Move): boolean {
+  if (move.type === "SUBMIT_DECLARATION") {
+    // Empty array = pass — legal iff PASS_ANNOUNCEMENT is legal
+    if (move.actions.length === 0)
+      return legalMoves.some(m => m.type === "PASS_ANNOUNCEMENT");
+    // Each sub-action must be individually legal
+    return move.actions.every(action =>
+      legalMoves.some(m => movesEqual(m, action as Move))
+    );
+  }
+  if (move.type === "SUBMIT_DISCARDS") {
+    return (
+      move.cards.length === 3 &&
+      move.cards.every(card =>
+        legalMoves.some(m => m.type === "DISCARD_CARD" && movesEqual(m, { type: "DISCARD_CARD", card } as Move))
+      )
+    );
+  }
+  return legalMoves.some(m => movesEqual(m, move));
 }
 
 const GAME_CONFIG = {
   slobberhannes: { min: 3, max: 6, default: 4 },
   strohmandeln:  { min: 2, max: 2, default: 2 },
+  dreiertarock:  { min: 3, max: 4, default: 3 },
 } as const;
 
 const GAME_DEFAULT_SETTINGS: Record<string, Record<string, unknown>> = {
   slobberhannes: {},
   strohmandeln:  { scoring: 'Mayr' },
+  dreiertarock:  { scoring: 'Mayr' },
 };
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
@@ -58,7 +91,7 @@ async function resolvePlayerForQuery(ctx: QueryCtx, guestUserId: string | undefi
 
 // ── Engine adapters ───────────────────────────────────────────────────────────
 
-type GameType = "slobberhannes" | "strohmandeln";
+type GameType = "slobberhannes" | "strohmandeln" | "dreiertarock";
 
 type NormalizedPlayerBreakdown = {
   player: number;
@@ -89,7 +122,7 @@ const slobberAdapter: EngineAdapter = {
       dealerIndex: firstPlayer,
       playerCount: seats,
     });
-    return { state, events: [] };
+    return { state, events: Slobberhannes.getDealEvents(firstPlayer, seats) };
   },
   getLegalMoves(state) {
     return Slobberhannes.getLegalMoves(state).map((card) => ({
@@ -107,12 +140,13 @@ const slobberAdapter: EngineAdapter = {
   isGameOver(state) { return Slobberhannes.isGameOver(state); },
   getGameResult(state) { return Slobberhannes.getGameResult(state); },
   reDeal(state, _settings) {
+    const newDealerIndex = (state.dealer + 1) % state.playerCount;
     const newState = Slobberhannes.dealState({
       scores: state.scores,
-      dealerIndex: (state.dealer + 1) % state.playerCount,
+      dealerIndex: newDealerIndex,
       playerCount: state.playerCount,
     });
-    return { state: newState, events: [] };
+    return { state: newState, events: Slobberhannes.getDealEvents(newDealerIndex, state.playerCount) };
   },
   chooseBotMove(state, playerIndex) {
     const card = chooseMove(Slobberhannes, state as Slobberhannes.State, playerIndex, {
@@ -141,7 +175,9 @@ const strahAdapter: EngineAdapter = {
       dealerIndex: firstPlayer,
       scoring: (settings.scoring as Strohmandeln.ScoringSystemName | undefined) ?? "Mayr",
     });
-    return Strohmandeln.uncoverStrawmenInitial(rawState);
+    const dealEvts = Strohmandeln.getDealEvents(firstPlayer);
+    const { state, events } = Strohmandeln.uncoverStrawmenInitial(rawState);
+    return { state, events: [...dealEvts, ...events] };
   },
   getLegalMoves(state) {
     return Strohmandeln.getLegalMoves(state) as Move[];
@@ -155,13 +191,16 @@ const strahAdapter: EngineAdapter = {
   isGameOver(state) { return Strohmandeln.isGameOver(state); },
   getGameResult(_state) { return null; },
   reDeal(state, settings) {
+    const newDealerIndex = (state.dealerIndex + 1) % 2;
     const rawState = Strohmandeln.dealState({
       scores: state.scores,
-      dealerIndex: (state.dealerIndex + 1) % 2,
+      dealerIndex: newDealerIndex,
       scoring: (settings.scoring as Strohmandeln.ScoringSystemName | undefined) ?? state.scoring ?? "Mayr",
       handMultiplier: state.nextHandMultiplier,
     });
-    return Strohmandeln.uncoverStrawmenInitial(rawState);
+    const dealEvts = Strohmandeln.getDealEvents(newDealerIndex);
+    const { state: newState, events } = Strohmandeln.uncoverStrawmenInitial(rawState);
+    return { state: newState, events: [...dealEvts, ...events] };
   },
   chooseBotMove(state, playerIndex) {
     return chooseMove(Strohmandeln, state as Strohmandeln.State, playerIndex, {
@@ -181,8 +220,60 @@ const strahAdapter: EngineAdapter = {
   },
 };
 
+const dreitAdapter: EngineAdapter = {
+  start({ seats, scores, firstPlayer, settings }) {
+    const state = Dreiertarock.dealState({
+      scores: scores ?? null,
+      dealerIndex: firstPlayer,
+      scoring: (settings.scoring as Dreiertarock.ScoringSystemName | undefined) ?? "Mayr",
+      playerCount: seats as 3 | 4,
+    });
+    return { state, events: Dreiertarock.getDealEvents(firstPlayer, seats as 3 | 4) };
+  },
+  getLegalMoves(state) {
+    return Dreiertarock.getLegalMoves(state) as Move[];
+  },
+  applyMove(state, move) {
+    return Dreiertarock.applyMove(state, move as any);
+  },
+  getCurrentPlayer(state) { return Dreiertarock.getCurrentPlayer(state); },
+  getDealer(state) { return (state as Dreiertarock.State).dealerIndex; },
+  isHandOver(state) { return Dreiertarock.isHandOver(state); },
+  isGameOver(state) { return Dreiertarock.isGameOver(state); },
+  getGameResult(_state) { return null; },
+  reDeal(state, settings) {
+    const playerCount = (state as Dreiertarock.State).playerCount ?? 3;
+    const newDealerIndex = ((state as Dreiertarock.State).dealerIndex + 1) % playerCount;
+    const newState = Dreiertarock.dealState({
+      scores: state.scores,
+      dealerIndex: newDealerIndex,
+      scoring: (settings.scoring as Dreiertarock.ScoringSystemName | undefined) ?? (state as Dreiertarock.State).scoring ?? "Mayr",
+      playerCount,
+    });
+    return { state: newState, events: Dreiertarock.getDealEvents(newDealerIndex, playerCount) };
+  },
+  chooseBotMove(state, playerIndex) {
+    return chooseMove(Dreiertarock, state as Dreiertarock.State, playerIndex, {
+      iterations: 200,
+    }) as Move;
+  },
+  getHands(state) { return state.hands as Card[][]; },
+  getHandBreakdown(state) {
+    const breakdown = Dreiertarock.computeScoreBreakdown(state as Dreiertarock.State);
+    if (!breakdown) return null;
+    return breakdown.map(b => ({
+      player: b.player,
+      role:   b.role,
+      items:  b.items,
+      total:  b.total,
+    }));
+  },
+};
+
 function getAdapter(gameType: GameType): EngineAdapter {
-  return gameType === "slobberhannes" ? slobberAdapter : strahAdapter;
+  if (gameType === "slobberhannes") return slobberAdapter;
+  if (gameType === "dreiertarock")  return dreitAdapter;
+  return strahAdapter;
 }
 
 // ── Event → chat message ──────────────────────────────────────────────────────
@@ -210,13 +301,44 @@ function formatEvents(events: BareEvent[], seatNames: string[]): string[] {
         break;
       }
       case "BID_MADE":
-        msgs.push(`${name(ev.player)} bid: play`);
+        msgs.push(`${name(ev.player)} bid: ${ev.bid}`);
         break;
       case "BID_PASSED":
         msgs.push(`${name(ev.player)} passed`);
         break;
       case "CARD_REVEALED":
         msgs.push(`${ev.card.rank}${ev.card.suit} revealed from ${name(ev.player)}'s pile ${ev.pile + 1}`);
+        break;
+      case "CONTRACT_SET":
+        if (ev.contract === 'Trischaken') {
+          msgs.push(`Trischaken — every player for themselves`);
+        } else {
+          msgs.push(`${name(ev.declarer)} declared ${ev.contract}`);
+        }
+        break;
+      case "ANNOUNCEMENT_MADE":
+        msgs.push(`${name(ev.player)} announced ${ev.announcement}`);
+        break;
+      case "CARDS_MOVED":
+        if (ev.reason === 'talon-exchange') {
+          const takerTransfer = ev.transfers.find(t => t.to.zone === 'hand');
+          if (takerTransfer && takerTransfer.to.zone === 'hand') {
+            msgs.push(`${name(takerTransfer.to.player)} took the talon`);
+          }
+        } else {
+          for (const t of ev.transfers) {
+            if (t.from.zone === 'strawman' && t.to.zone === 'hand') {
+              msgs.push(`${t.card.rank}${t.card.suit} → ${name(t.to.player)}'s hand`);
+            }
+          }
+        }
+        break;
+      case "DEAL":
+        msgs.push(
+          ev.zone === 'hand'
+            ? `${name(ev.dealer)} deals ${ev.count} card${ev.count !== 1 ? 's' : ''} to ${name(ev.to)}`
+            : `${name(ev.dealer)} deals to ${name(ev.to)}'s pile ${(ev.pile ?? 0) + 1}`
+        );
         break;
     }
   }
@@ -431,14 +553,13 @@ export const getTable = query({
 });
 
 export const getTableMessages = query({
-  args: { gameId: v.id("games") },
-  handler: async (ctx, { gameId }) => {
-    const msgs = await ctx.db
+  args: { gameId: v.id("games"), sinceTs: v.number() },
+  handler: async (ctx, { gameId, sinceTs }) => {
+    return ctx.db
       .query("table_messages")
-      .withIndex("by_game_ts", (q) => q.eq("gameId", gameId))
-      .order("desc")
-      .take(500);
-    return msgs.reverse();
+      .withIndex("by_game_ts", (q) => q.eq("gameId", gameId).gt("ts", sinceTs))
+      .order("asc")
+      .collect();
   },
 });
 
@@ -507,6 +628,7 @@ export const getMyGameState = query({
         seats,
         gameType: game.gameType,
         strawmen: null,
+        talon: null as { revealed: boolean; groups: [Card[], Card[]] } | null,
         continuation: null,
         lastHandSummary: (game.lastHandSummary ?? null) as {
           deltas: { player: number; delta: number; reason: string }[];
@@ -545,6 +667,7 @@ export const getMyGameState = query({
         seats,
         gameType: game.gameType,
         strawmen: null,
+        talon: null as { revealed: boolean; groups: [Card[], Card[]] } | null,
         continuation: { votes, myVote },
         lastHandSummary: (game.lastHandSummary ?? null) as {
           deltas: { player: number; delta: number; reason: string }[];
@@ -604,6 +727,19 @@ export const getMyGameState = query({
       );
     }
 
+    // Talon (Dreiertarock only) — expose during bidding/exchange phases only
+    let talon: { revealed: boolean; groups: [Card[], Card[]] } | null = null;
+    if (game.gameType === "dreiertarock" && liveState) {
+      const phase = liveState.state.phase as string;
+      if (phase === "bidding" || phase === "contract_choice") {
+        // Talon dealt but unrevealed — send empty groups (UI shows face-down backs)
+        talon = { revealed: false, groups: [[], []] };
+      } else if (phase === "exchange") {
+        // Both groups are publicly revealed so declarer can choose
+        talon = { revealed: true, groups: liveState.state.talonGroups as [Card[], Card[]] };
+      }
+    }
+
     return {
       publicState: {
         currentTrick: publicState.currentTrick,
@@ -620,6 +756,7 @@ export const getMyGameState = query({
       seats,
       gameType: game.gameType,
       strawmen,
+      talon,
       continuation: null,
       lastHandSummary: (game.lastHandSummary ?? null) as {
         deltas: { player: number; delta: number; reason: string }[];
@@ -633,16 +770,64 @@ export const getMyGameState = query({
   },
 });
 
+export const getGameCatalog = query({
+  args: {},
+  handler: async () => [
+    {
+      type: "slobberhannes" as const,
+      name: Slobberhannes.GAME_NAME,
+      icon: Slobberhannes.GAME_ICON,
+      options: [] as { type: "select"; key: string; label: string; default: string; choices: { value: string; label: string }[] }[],
+    },
+    {
+      type: "strohmandeln" as const,
+      name: Strohmandeln.GAME_NAME,
+      icon: Strohmandeln.GAME_ICON,
+      options: [
+        {
+          type: "select" as const,
+          key: "scoring",
+          label: "Scoring system",
+          default: "Mayr",
+          choices: (Object.keys(Strohmandeln.SCORING_SYSTEMS) as Strohmandeln.ScoringSystemName[]).map((k) => ({
+            value: k,
+            label: Strohmandeln.SCORING_SYSTEMS[k].name,
+          })),
+        },
+      ],
+    },
+    {
+      type: "dreiertarock" as const,
+      name: Dreiertarock.GAME_NAME,
+      icon: Dreiertarock.GAME_ICON,
+      options: [
+        {
+          type: "select" as const,
+          key: "scoring",
+          label: "Scoring system",
+          default: "Mayr",
+          choices: (Object.keys(Dreiertarock.SCORING_SYSTEMS) as Dreiertarock.ScoringSystemName[]).map((k) => ({
+            value: k,
+            label: Dreiertarock.SCORING_SYSTEMS[k].name,
+          })),
+        },
+      ],
+    },
+  ],
+});
+
 // ── Mutations ─────────────────────────────────────────────────────────────────
 
 export const createTable = mutation({
   args: {
-    gameType: v.union(v.literal("slobberhannes"), v.literal("strohmandeln")),
+    gameType: v.union(v.literal("slobberhannes"), v.literal("strohmandeln"), v.literal("dreiertarock")),
+    settings: v.optional(v.record(v.string(), v.string())),
     guestUserId: v.optional(v.string()),
   },
-  handler: async (ctx, { gameType, guestUserId }) => {
+  handler: async (ctx, { gameType, settings, guestUserId }) => {
     const player = await resolvePlayer(ctx, guestUserId);
     const cfg = GAME_CONFIG[gameType];
+    const merged = { ...(GAME_DEFAULT_SETTINGS[gameType] ?? {}), ...(settings ?? {}) };
 
     const gameId = await ctx.db.insert("games", {
       gameType,
@@ -650,7 +835,7 @@ export const createTable = mutation({
       seatCount: cfg.max,
       minSeatCount: cfg.min,
       creatorPlayerId: player._id,
-      settings: GAME_DEFAULT_SETTINGS[gameType] ?? {},
+      settings: merged,
       startedAt: Date.now(),
     });
 
@@ -974,8 +1159,7 @@ async function _applyMoveLogic(
 
   // Validate the move is legal
   const legalMoves = adapter.getLegalMoves(state);
-  const isLegal = legalMoves.some((m) => movesEqual(m, move as Move));
-  if (!isLegal) throw new Error("Illegal move");
+  if (!isLegalMove(legalMoves, move as Move)) throw new Error("Illegal move: " + JSON.stringify(move));
 
   const seatNames = await Promise.all(
     sortedSeats.map(async (s) => {
@@ -1058,8 +1242,8 @@ async function _applyMoveLogic(
   }
 
   if (adapter.isHandOver(nextState)) {
-    if (game.gameType === "strohmandeln") {
-      // Strohmandeln has no fixed session end — pause and ask players whether to continue.
+    if (game.gameType === "strohmandeln" || game.gameType === "dreiertarock") {
+      // No fixed session end — pause and ask players whether to continue.
       await _enterBetweenHands(ctx, gameId, game, nextState, sortedSeats, seatNames);
       return { nextIsBot: false, trickJustResolved: false };
     }
@@ -1092,7 +1276,7 @@ async function _applyMoveLogic(
     }
 
     await ctx.db.patch(liveStateRow._id, { state: newHandState });
-    await _updatePublicAndHands(ctx, gameId, newHandState, sortedSeats, adapter);
+    await _updatePublicAndHands(ctx, gameId, newHandState, sortedSeats, adapter, undefined, dealEvents);
 
     const nextPlayer = adapter.getCurrentPlayer(newHandState);
     const nextIsBot = await _isBot(ctx, sortedSeats, nextPlayer);
@@ -1110,7 +1294,8 @@ async function _applyMoveLogic(
 
 const ANIMATION_EVENT_FILTER = new Set([
   "CARD_PLAYED", "TRICK_RESOLVED", "CARD_REVEALED", "CARDS_MOVED",
-  "BID_MADE", "BID_PASSED", "HAND_SCORED",
+  "BID_MADE", "BID_PASSED", "HAND_SCORED", "DEAL",
+  "CONTRACT_SET", "ANNOUNCEMENT_MADE",
 ]);
 
 async function _updatePublicAndHands(
@@ -1230,11 +1415,13 @@ async function _enterBetweenHands(
   seatNames: string[],
 ) {
   // Store continuation info so the next hand can be re-dealt without the live state
+  const playerCount: number = handOverState.playerCount ?? sortedSeats.length;
   const continuationData = {
-    scores: [...(handOverState.scores ?? [0, 0])],
+    scores: [...(handOverState.scores ?? [])],
     nextHandMultiplier: handOverState.nextHandMultiplier ?? 1,
-    nextDealerIndex: ((handOverState.dealerIndex ?? 0) + 1) % 2,
+    nextDealerIndex: ((handOverState.dealerIndex ?? 0) + 1) % playerCount,
     scoring: handOverState.scoring ?? "Mayr",
+    playerCount,
   };
 
   // Delete all live rows — they are no longer needed
@@ -1305,20 +1492,35 @@ async function _startNextHand(
     scores: number[];
     nextHandMultiplier: number;
     nextDealerIndex: number;
-    scoring: Strohmandeln.ScoringSystemName;
+    scoring: string;
+    playerCount?: number;
   };
 
-  const rawState = Strohmandeln.dealState({
-    scores: cd.scores,
-    dealerIndex: cd.nextDealerIndex,
-    scoring: cd.scoring ?? "Mayr",
-    handMultiplier: cd.nextHandMultiplier ?? 1,
-  });
-  const { state: newState, events: dealEvents } = Strohmandeln.uncoverStrawmenInitial(rawState);
+  let newState: any;
+  let dealEvents: BareEvent[];
+
+  if (game.gameType === "dreiertarock") {
+    newState = Dreiertarock.dealState({
+      scores: cd.scores,
+      dealerIndex: cd.nextDealerIndex,
+      scoring: (cd.scoring ?? "Mayr") as Dreiertarock.ScoringSystemName,
+      playerCount: (cd.playerCount ?? 3) as 3 | 4,
+    });
+    dealEvents = Dreiertarock.getDealEvents(cd.nextDealerIndex, (cd.playerCount ?? 3) as 3 | 4);
+  } else {
+    const rawState = Strohmandeln.dealState({
+      scores: cd.scores,
+      dealerIndex: cd.nextDealerIndex,
+      scoring: (cd.scoring ?? "Mayr") as Strohmandeln.ScoringSystemName,
+      handMultiplier: cd.nextHandMultiplier ?? 1,
+    });
+    ({ state: newState, events: dealEvents } = Strohmandeln.uncoverStrawmenInitial(rawState));
+  }
 
   await ctx.db.insert("game_live_state", { gameId, state: newState });
 
-  const currentPlayer = Strohmandeln.getCurrentPlayer(newState);
+  const nextAdapter = getAdapter(game.gameType as GameType);
+  const currentPlayer = nextAdapter.getCurrentPlayer(newState);
   const handStartEvents = dealEvents.filter((e) => ANIMATION_EVENT_FILTER.has(e.type));
   await ctx.db.insert("game_public_state", {
     gameId,
@@ -1511,6 +1713,190 @@ export const applyBotMoves = internalAction({
       if (result.trickJustResolved) {
         await new Promise<void>(r => setTimeout(r, 1200));
       }
+    }
+  },
+});
+
+// ── Cron job: cleanup stale tables and abandoned games ────────────────────────
+
+export const cleanupStaleGames = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const WAITING_STALE_MS   = 10 * 60 * 1000;  // 10 min: delete abandoned waiting table
+    const IDLE_TURN_MS       =  5 * 60 * 1000;  // 5 min idle on your turn → bot substitution
+    const ACTIVE_STALE_MS    = 60 * 60 * 1000;  // 60 min with no humans → finalize game
+    const PRESENCE_ONLINE_MS = 90_000;           // 90s (1.5× the 60s heartbeat TTL)
+
+    async function hasOnlineHumans(gameId: Id<"games">): Promise<boolean> {
+      const seats = await ctx.db
+        .query("game_seats")
+        .withIndex("by_game", (q) => q.eq("gameId", gameId))
+        .collect();
+      for (const seat of seats) {
+        const player = await ctx.db.get(seat.playerId);
+        if (!player || player.isBot) continue;
+        const presence = await ctx.db
+          .query("presence")
+          .withIndex("by_user", (q) => q.eq("userId", player.userId))
+          .first();
+        if (presence && presence.lastSeen >= now - PRESENCE_ONLINE_MS) return true;
+      }
+      return false;
+    }
+
+    const allGames = await ctx.db.query("games").collect();
+
+    // Step 1: Delete stale waiting tables (no online humans, > 10 min since creation)
+    for (const game of allGames) {
+      if (game.status !== "waiting") continue;
+      if (game.startedAt >= now - WAITING_STALE_MS) continue;
+      if (await hasOnlineHumans(game._id)) continue;
+
+      const messages = await ctx.db
+        .query("table_messages")
+        .withIndex("by_game_ts", (q) => q.eq("gameId", game._id))
+        .collect();
+      for (const msg of messages) await ctx.db.delete(msg._id);
+
+      const seats = await ctx.db
+        .query("game_seats")
+        .withIndex("by_game", (q) => q.eq("gameId", game._id))
+        .collect();
+      for (const seat of seats) await ctx.db.delete(seat._id);
+
+      await ctx.db.delete(game._id);
+    }
+
+    // Step 2: Bot-substitute idle human players (active games, > 5 min idle on their turn)
+    for (const game of allGames) {
+      if (game.status !== "active") continue;
+
+      const publicState = await ctx.db
+        .query("game_public_state")
+        .withIndex("by_game", (q) => q.eq("gameId", game._id))
+        .first();
+      if (!publicState) continue;
+
+      const seats = await ctx.db
+        .query("game_seats")
+        .withIndex("by_game", (q) => q.eq("gameId", game._id))
+        .collect();
+      const sortedSeats = seats.sort((a, b) => a.seatIndex - b.seatIndex);
+
+      // currentTurn is an engine player index; sorted seats give 1:1 mapping to seatIndex
+      const idleSeat = sortedSeats[publicState.currentTurn];
+      if (!idleSeat) continue;
+
+      const idlePlayer = await ctx.db.get(idleSeat.playerId);
+      if (!idlePlayer || idlePlayer.isBot) continue; // already a bot — applyBotMoves handles it
+
+      const latestMove = await ctx.db
+        .query("game_moves")
+        .withIndex("by_game_seq", (q) => q.eq("gameId", game._id))
+        .order("desc")
+        .first();
+      const lastActivity = latestMove?.ts ?? game.startedAt;
+      if (lastActivity >= now - IDLE_TURN_MS) continue;
+
+      // Count remaining human seats including this idle one
+      const humanCount = (
+        await Promise.all(seats.map(async (s) => {
+          const p = await ctx.db.get(s.playerId);
+          return p && !p.isBot;
+        }))
+      ).filter(Boolean).length;
+
+      if (humanCount <= 1) continue; // last human — step 3 handles finalization
+
+      // Swap the idle human for a fresh bot
+      const botId = await ctx.db.insert("players", {
+        userId: `bot_${crypto.randomUUID()}`,
+        displayName: "Bot",
+        isBot: true,
+        ratings: {},
+        createdAt: now,
+      });
+      await ctx.db.patch(idleSeat._id, { playerId: botId });
+
+      const handRow = await ctx.db
+        .query("player_hands")
+        .withIndex("by_game", (q) => q.eq("gameId", game._id))
+        .filter((q) => q.eq(q.field("seatIndex"), idleSeat.seatIndex))
+        .first();
+      if (handRow) await ctx.db.patch(handRow._id, { playerId: botId });
+
+      await ctx.scheduler.runAfter(0, internal.games.applyBotMoves, { gameId: game._id });
+    }
+
+    // Step 3: Finalize abandoned active/between_hands games
+    // (no humans online + last activity > 60 min ago)
+    const activeGames = allGames.filter(
+      (g) => g.status === "active" || g.status === "between_hands"
+    );
+
+    for (const game of activeGames) {
+      if (await hasOnlineHumans(game._id)) continue;
+
+      const latestMove = await ctx.db
+        .query("game_moves")
+        .withIndex("by_game_seq", (q) => q.eq("gameId", game._id))
+        .order("desc")
+        .first();
+      const lastActivity = latestMove?.ts ?? game.startedAt;
+      if (lastActivity >= now - ACTIVE_STALE_MS) continue;
+
+      const seats = await ctx.db
+        .query("game_seats")
+        .withIndex("by_game", (q) => q.eq("gameId", game._id))
+        .collect();
+      const humanPlayers = (
+        await Promise.all(
+          seats.map(async (s) => {
+            const p = await ctx.db.get(s.playerId);
+            return p && !p.isBot ? { playerId: s.playerId, userId: p.userId } : null;
+          })
+        )
+      ).filter((x): x is { playerId: Id<"players">; userId: string } => x !== null);
+
+      if ((game.settings as Record<string, unknown>)?.ranked === true && humanPlayers.length > 0) {
+        // Ranked abandonment: dock the player who went offline first
+        const withPresence = await Promise.all(
+          humanPlayers.map(async ({ playerId, userId }) => {
+            const presence = await ctx.db
+              .query("presence")
+              .withIndex("by_user", (q) => q.eq("userId", userId))
+              .first();
+            return { playerId, lastSeen: presence?.lastSeen ?? 0 };
+          })
+        );
+        const abandoner = withPresence.sort((a, b) => a.lastSeen - b.lastSeen)[0]!;
+        await ctx.db.patch(game._id, {
+          status: "finished",
+          endedAt: now,
+          result: { abandoned: true, abandonerPlayerId: abandoner.playerId },
+        });
+      } else {
+        await ctx.db.patch(game._id, { status: "finished", endedAt: now });
+      }
+
+      const liveRows = await ctx.db
+        .query("game_live_state")
+        .withIndex("by_game", (q) => q.eq("gameId", game._id))
+        .collect();
+      for (const row of liveRows) await ctx.db.delete(row._id);
+
+      const publicRows = await ctx.db
+        .query("game_public_state")
+        .withIndex("by_game", (q) => q.eq("gameId", game._id))
+        .collect();
+      for (const row of publicRows) await ctx.db.delete(row._id);
+
+      const handRows = await ctx.db
+        .query("player_hands")
+        .withIndex("by_game", (q) => q.eq("gameId", game._id))
+        .collect();
+      for (const row of handRows) await ctx.db.delete(row._id);
     }
   },
 });

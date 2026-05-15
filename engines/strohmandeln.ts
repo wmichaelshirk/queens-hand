@@ -1,6 +1,13 @@
-import type { Card, BareEvent, EngineResult, Move } from '../types';
+import type { Card, BareEvent, DealEvent, EngineResult, Move } from '../types';
 import type { ISMCTSEngine } from '../lib/engine';
 import { bipartiteMatch } from '../lib/matching';
+import {
+  TAROCK_RANKS, BLACK_RANKS, RED_RANKS, BLACK_SUITS, RED_SUITS,
+  cardPointValue, countCardPoints, isTarock, cardEquals, createDeck, shuffle,
+  trickWinner as _trickWinnerFn,
+  birdWinnerAtPos as _birdWinnerAtPosFn, inferVoids as _inferVoidsFn,
+} from '../lib/tarock';
+import type { TarockPlay, TarockTrickRecord } from '../lib/tarock';
 
 export const GAME_NAME = "Strohmandeln";
 export const GAME_ICON = "👨🏻‍🌾";
@@ -92,53 +99,7 @@ export const GAME_ICON = "👨🏻‍🌾";
  *   after each hand_over whether to continue (isGameOver always returns false).
  */
 
-// ── Tarock deck constants ──────────────────────────────────────────────────────
-
-// Tarocks ranked high → low: Sküs, Mond (XXI), XX … II, Pagat (I)
-const TAROCK_RANKS = [
-  '★', 'XXI', 'XX', 'XIX', 'XVIII', 'XVII', 'XVI', 'XV', 'XIV', 'XIII', 'XII',
-  'XI', 'X', 'IX',  'VIII',  'VII',  'VI',  'V',  'IV',  'III',  'II',  'I',
-] as const;
-
-// Black-suit ranks high → low; red-suit ranks high → low
-const BLACK_RANKS = ['K', 'Q', 'Kn', 'J', '10', '9', '8', '7'] as const;
-const RED_RANKS   = ['K', 'Q', 'Kn', 'J', 'A',  '2', '3', '4'] as const;
-
-const BLACK_SUITS = ['♣', '♠'] as const;
-const RED_SUITS   = ['♥', '♦'] as const;
-
-// Numeric strength (higher = stronger)
-const TAROCK_RANK_ORDER: Record<string, number> = Object.fromEntries(
-  [...TAROCK_RANKS].reverse().map((r, i) => [r, i])   // Pagat=0, Sküs=21
-);
-const BLACK_RANK_ORDER: Record<string, number> = Object.fromEntries(
-  [...BLACK_RANKS].reverse().map((r, i) => [r, i])    // 7=0, K=7
-);
-const RED_RANK_ORDER: Record<string, number> = Object.fromEntries(
-  [...RED_RANKS].reverse().map((r, i) => [r, i])      // 4=0, K=7
-);
-
-// Individual card-point values (before group deduction)
-const CARD_POINT_VALUES: Record<string, number> = {
-  '★': 4, 'XXI': 4, 'I': 4, // Trull (Sküs, Mond, Pagat)
-  K: 4, Q: 3, Kn: 2, J: 1,  // court cards (all suits)
-};
-
-function cardPointValue(card: Card): number {
-  return CARD_POINT_VALUES[card.rank] ?? 0;
-}
-
-/**
- * Austrian Tarock card-point counting: Σ(individual values) + floor((n+1)/3) for n cards.
- * Groups of 3 contribute +1; a leftover pair also contributes +1; a lone card contributes 0.
- * With 2-card tricks the two players' counts always sum to 70.
- */
-function countCardPoints(cards: Card[]): number {
-  const groups = Math.floor((cards.length + 1) / 3);
-  return cards.reduce((sum, c) => sum + cardPointValue(c), 0) + groups;
-}
-
-function isTarock(c: Card): boolean { return c.suit === 'T'; }
+// ── Engine constants ───────────────────────────────────────────────────────────
 
 const PLAYER_COUNT          = 2  as const;
 // Typical hand outcome magnitude: Beck win/loss ≈ ±2–3; Mayr ≈ ±3–4; Valat ≈ ±12–15.
@@ -157,16 +118,8 @@ const ROYAL_TRULL_RANKS = new Set<string>(['K']);  // need 4 of these
 
 // ── Domain types ──────────────────────────────────────────────────────────────
 
-export interface Play {
-  playerIndex: number;
-  card: Card;
-}
-
-export interface TrickRecord {
-  plays:   Play[];
-  ledSuit: string;
-  winner:  number;
-}
+export type Play        = TarockPlay;
+export type TrickRecord = TarockTrickRecord;
 
 /**
  * A single strawman packet of four cards, stored bottom-to-top.
@@ -304,6 +257,7 @@ export interface State {
   handMultiplier:     number;            // score multiplier for this hand (set from nextHandMultiplier at deal time)
   nextHandMultiplier: number;            // multiplier the session should pass to the next dealState
   revealedInHand:     Card[][];          // per-player cards in hand publicly seen by both players
+  deferredPileReveal: { player: number; pileIdx: number } | null;  // set when leading from a pile; processed after trick resolves
   // No targetScore — Strohmandeln is played for a hard score with no fixed session length.
   // The session layer asks players after each hand_over whether to continue.
 }
@@ -313,55 +267,6 @@ export interface DealConfig {
   dealerIndex?:     number;
   scoring?:         ScoringSystemName;
   handMultiplier?:  number;   // pass previousState.nextHandMultiplier here
-}
-
-// ── Deck construction ─────────────────────────────────────────────────────────
-
-function createDeck(): Card[] {
-  const tarocks: Card[] = TAROCK_RANKS.map(rank => ({ suit: 'T' as const, rank }));
-  const suitCards: Card[] = [
-    ...BLACK_SUITS.flatMap(suit => BLACK_RANKS.map(rank => ({ suit, rank }))),
-    ...RED_SUITS.flatMap(suit   => RED_RANKS.map(rank   => ({ suit, rank }))),
-  ];
-  return [...tarocks, ...suitCards]; // 22 + 32 = 54
-}
-
-function shuffle<T>(arr: T[]): T[] {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j] as T, a[i] as T];
-  }
-  return a;
-}
-
-function cardEquals(a: Card, b: Card): boolean {
-  return a.suit === b.suit && a.rank === b.rank;
-}
-
-// ── Trick resolution ──────────────────────────────────────────────────────────
-
-/**
- * Returns a comparable strength value for a card in a trick.
- * Tarocks always beat suit cards. Off-suit non-tarock cards cannot win (−1).
- */
-function _trickStrength(card: Card, ledSuit: string): number {
-  if (isTarock(card)) return 1000 + (TAROCK_RANK_ORDER[card.rank] ?? 0);
-  if (card.suit !== ledSuit) return -1;
-  const order = (BLACK_SUITS as readonly string[]).includes(card.suit)
-    ? BLACK_RANK_ORDER
-    : RED_RANK_ORDER;
-  return order[card.rank] ?? 0;
-}
-
-function _trickWinner(trick: Play[], ledSuit: string): number {
-  let best = 0;
-  for (let i = 1; i < trick.length; i++) {
-    if (_trickStrength(trick[i]!.card, ledSuit) > _trickStrength(trick[best]!.card, ledSuit)) {
-      best = i;
-    }
-  }
-  return trick[best]!.playerIndex;
 }
 
 // ── State factory ─────────────────────────────────────────────────────────────
@@ -425,7 +330,21 @@ function dealState({
     handMultiplier,
     nextHandMultiplier:  1,
     revealedInHand:      [[], []],
+    deferredPileReveal:  null,
   };
+}
+
+function getDealEvents(dealerIndex: number): DealEvent[] {
+  const forehand = 1 - dealerIndex;
+  const order = [forehand, dealerIndex];
+  const events: DealEvent[] = [];
+  for (let packet = 0; packet < 3; packet++)
+    for (const pi of order)
+      events.push({ type: 'DEAL', dealer: dealerIndex, to: pi, zone: 'hand', count: 5 });
+  for (let pile = 0; pile < STRAWMAN_PILE_COUNT; pile++)
+    for (const pi of order)
+      events.push({ type: 'DEAL', dealer: dealerIndex, to: pi, zone: 'strawman', pile, count: STRAWMAN_PILE_SIZE });
+  return events;
 }
 
 const _clone: <T>(x: T) => T = typeof structuredClone === 'function'
@@ -559,18 +478,8 @@ function getHandResult(state: State): { declarerPoints: number; defenderPoints: 
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-/**
- * Find who won a trick with the Bird (trumps I - IV) at a given position from the end.
- * fromEnd=1 = last trick (Pagat Ultimo), 2 = penultimate (Uhu), etc.
- * Returns the winner's player index, or null if given Bird was not played there.
- */
 function _birdWinnerAtPos(trickLog: TrickRecord[], fromEnd: number): number | null {
-  const idx = trickLog.length - fromEnd;
-  if (idx < 0) return null;
-  const trick = trickLog[idx]!;
-  const play  = trick.plays.find(p => p.card.suit === 'T' && p.card.rank === TAROCK_RANKS.at(-fromEnd));
-  if (!play) return null;
-  return trick.winner;
+  return _birdWinnerAtPosFn(trickLog, fromEnd, TAROCK_RANKS.at(-fromEnd)!);
 }
 
 /** Derive everything a scoring system needs from a completed hand. */
@@ -1085,13 +994,12 @@ function _applyCardPlay(state: State, card: Card, simulate: boolean): EngineResu
     throw new Error(`Card ${JSON.stringify(card)} not available for player ${pi}`);
   }
 
-  // Collect pile-reveal events separately so they appear AFTER CARD_PLAYED and
-  // TRICK_RESOLVED in the event stream — giving animations the correct sequence:
-  // card flies to trick → trick sweeps → new pile top flips → slides to hand.
-  const pileEvents: BareEvent[] = [];
-  if (typeof removedFrom === 'number') {
-    _uncoverPile(s, pi, removedFrom, pileEvents, simulate);
-  }
+  // Track whether the current player played from a pile; _uncoverPile is called
+  // after TRICK_RESOLVED so animations fire in order: card-to-trick → trick-sweep → pile-flip.
+  // Leading from a pile defers the reveal to the move that completes the trick.
+  const currentPileReveal = typeof removedFrom === 'number'
+    ? { player: pi, pileIdx: removedFrom }
+    : null;
 
   if (s.pendingAnnouncement !== null) s.pendingAnnouncement = null;
 
@@ -1100,7 +1008,7 @@ function _applyCardPlay(state: State, card: Card, simulate: boolean): EngineResu
 
   if (s.currentTrick.length === PLAYER_COUNT) {
     const ledSuit = s.currentTrick[0]!.card.suit;
-    const winner  = _trickWinner(s.currentTrick, ledSuit);
+    const winner  = _trickWinnerFn(s.currentTrick, ledSuit);
 
     for (const { card: c } of s.currentTrick) s.capturedCards[winner]!.push(c);
     s.trickLog.push({ plays: [...s.currentTrick], ledSuit, winner });
@@ -1164,50 +1072,26 @@ function _applyCardPlay(state: State, card: Card, simulate: boolean): EngineResu
 
       s.phase = 'hand_over';
     }
-  }
 
-  // Pile reveals always follow trick events in the stream.
-  for (const e of pileEvents) events.push(e);
+    // Pile reveals follow all trick events: leader's deferred reveal first, then follower's.
+    if (s.deferredPileReveal !== null) {
+      _uncoverPile(s, s.deferredPileReveal.player, s.deferredPileReveal.pileIdx, events, simulate);
+      s.deferredPileReveal = null;
+    }
+    if (currentPileReveal !== null) {
+      _uncoverPile(s, currentPileReveal.player, currentPileReveal.pileIdx, events, simulate);
+    }
+  } else {
+    // Trick incomplete (first card played): defer pile reveal to after trick resolution.
+    if (currentPileReveal !== null) {
+      s.deferredPileReveal = currentPileReveal;
+    }
+  }
 
   return { state: s, events };
 }
 
 // ── ISMCTS interface ──────────────────────────────────────────────────────────
-
-/**
- * Scan the trick log for provable suit/tarock voids (opponents only).
- *
- * Farbzwang (follow-suit obligation):
- *   1. Must follow the led suit if possible.
- *   2. Otherwise must play a Tarock.
- *   3. Otherwise play any card.
- *
- * So when a non-leading player plays off-suit:
- *   - They are void in the led suit (always).
- *   - If they played a non-Tarock off-suit, they are also void in Tarocks
- *     (they would have been forced to play one otherwise).
- */
-function _inferVoids(
-  trickLog: TrickRecord[],
-  perspectivePlayer: number,
-): Map<number, Set<string>> {
-  const voids = new Map<number, Set<string>>();
-  const addVoid = (pi: number, suit: string) => {
-    if (!voids.has(pi)) voids.set(pi, new Set());
-    voids.get(pi)!.add(suit);
-  };
-  for (const { ledSuit, plays } of trickLog) {
-    for (let i = 1; i < plays.length; i++) {
-      const { playerIndex, card } = plays[i]!;
-      if (playerIndex === perspectivePlayer) continue;
-      if (card.suit !== ledSuit) {
-        addVoid(playerIndex, ledSuit);
-        if (!isTarock(card)) addVoid(playerIndex, 'T');
-      }
-    }
-  }
-  return voids;
-}
 
 /**
  * Produce a determinized world consistent with perspectivePlayer's information.
@@ -1227,7 +1111,7 @@ function determinize(state: State, perspectivePlayer: number): State {
 
   const s        = cloneState(state);
   const opponent = 1 - perspectivePlayer;
-  const voids    = _inferVoids(s.trickLog, perspectivePlayer);
+  const voids    = _inferVoidsFn(s.trickLog, perspectivePlayer);
 
   // ── Collect hidden cards and their destination slots ──────────────────────
 
@@ -1342,7 +1226,7 @@ export {
   // Card utilities
   createDeck, shuffle, cardEquals, cardPointValue, countCardPoints, isTarock,
   // State lifecycle
-  dealState, cloneState, uncoverStrawmenInitial,
+  dealState, getDealEvents, cloneState, uncoverStrawmenInitial,
   // Queries
   getCurrentPlayer, getLegalMoves,
   isHandOver, isGameOver, getHandResult, computeHandSummary, computeScoreBreakdown,

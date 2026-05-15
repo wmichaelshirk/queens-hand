@@ -6,6 +6,7 @@
     signOut, convex, watchQuery, convexAuthenticated, authResolving,
   } from "$lib/convex";
   import { GAME_REGISTRY } from "$lib/gameConfig";
+  import CreateTableModal from "$lib/components/CreateTableModal.svelte";
 
   // ── Auth guard ────────────────────────────────────────────────────────────────
 
@@ -107,22 +108,7 @@
 
   const activeTables = watchQuery<ActiveTable[]>("games:listActiveTables" as any, {});
 
-  let newTableGameType = $state<"slobberhannes" | "strohmandeln">("slobberhannes");
-  let creatingTable = $state(false);
-
-  async function createTable() {
-    if (creatingTable) return;
-    creatingTable = true;
-    try {
-      const gameId = await convex.mutation("games:createTable" as any, {
-        gameType: newTableGameType,
-        guestUserId: $guestSession?.userId,
-      });
-      goto(`/table/${gameId}`);
-    } finally {
-      creatingTable = false;
-    }
-  }
+  let showCreateModal = $state(false);
 </script>
 
 {#if $isLoggedIn}
@@ -200,21 +186,10 @@
 
       <!-- Create card -->
       <div class="table-card create">
-        <div class="card-title">New Table</div>
-        <div class="game-picker">
-          {#each Object.entries(GAME_REGISTRY) as [type, meta]}
-            <button
-              class="pick-btn"
-              class:selected={newTableGameType === type}
-              onclick={() => newTableGameType = type as typeof newTableGameType}
-            ><span class="pick-icon">{meta.icon}</span> {meta.name}</button>
-          {/each}
-        </div>
-        <div class="card-footer">
-          <button class="btn accent-sm" onclick={createTable} disabled={creatingTable}>
-            {creatingTable ? "Creating…" : "Create Table"}
-          </button>
-        </div>
+        <button class="create-new-btn" onclick={() => showCreateModal = true}>
+          <span class="create-plus">+</span>
+          Create New Table
+        </button>
       </div>
 
       <!-- Active tables -->
@@ -259,6 +234,13 @@
 
   </div><!-- .lobby -->
 </div><!-- .shell -->
+
+{#if showCreateModal}
+  <CreateTableModal
+    onClose={() => showCreateModal = false}
+    onCreated={(id) => { showCreateModal = false; goto(`/table/${id}`); }}
+  />
+{/if}
 {/if}
 
 <style>
@@ -489,24 +471,29 @@
     color: #4caf50;
   }
 
-  .game-picker {
-    display: flex;
-    gap: 0.4rem;
-  }
-
-  .pick-btn {
-    flex: 1;
+  .create-new-btn {
+    width: 100%;
     background: #0f3460;
-    border: 1px solid #1a4a80;
-    border-radius: 5px;
+    border: 1px dashed #1a4a80;
+    border-radius: 6px;
     color: #888;
-    font-size: 0.78rem;
-    padding: 0.35rem 0.4rem;
+    font-size: 0.85rem;
+    padding: 0.75rem 1rem;
     cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
   }
 
-  .pick-btn:hover { background: #1a4a80; color: #ccc; }
-  .pick-btn.selected { border-color: #e94560; color: #e0e0e0; }
+  .create-new-btn:hover { background: #1a4a80; color: #ccc; border-style: solid; }
+
+  .create-plus {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #e94560;
+    line-height: 1;
+  }
 
   .seats {
     display: flex;

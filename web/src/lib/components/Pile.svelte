@@ -20,7 +20,8 @@
 
 <div class="straw-pile" class:empty={pile.depth === 0}>
   {#if pile.depth > 0}
-    {@const shown = Math.min(pile.depth, MAX_SHOWN)}
+    {@const backCount = pile.topCard != null ? pile.depth : pile.depth - 1}
+    {@const shown = Math.min(backCount, MAX_SHOWN)}
     <div class="pile-stack" style="--depth: {shown}">
       {#each Array(shown) as _, i}
         {@const idx = i + 1}

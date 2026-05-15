@@ -5,7 +5,14 @@ export function isRedSuit(suit: string): boolean {
 }
 
 export function centerSymbol(rank: string, suit: string): string {
-  if (suit === 'T') return rank;
+  if (suit === 'T') {
+    return ({
+      'I': '🐦',
+      'II': '🦉',
+      'III': '🦜',
+      'IV': '🦃',
+    }[rank]) ?? rank
+  };
   const tone = SUIT_SKIN[suit] ?? '';
   if (rank === 'K')  return `🤴${tone}`;
   if (rank === 'Q')  return `👸${tone}`;

@@ -23,7 +23,7 @@ export default defineSchema({
     .index("by_user", ["userId"]),
 
   games: defineTable({
-    gameType: v.union(v.literal("slobberhannes"), v.literal("strohmandeln")),
+    gameType: v.union(v.literal("slobberhannes"), v.literal("strohmandeln"), v.literal("dreiertarock")),
     status: v.union(v.literal("waiting"), v.literal("active"), v.literal("finished"), v.literal("between_hands")),
     seatCount: v.number(),       // max seats
     minSeatCount: v.number(),    // min seats required to start

@@ -59,7 +59,58 @@ export interface MakeAnnouncementMove {
   announcement: string;   // game-specific
 }
 
-export type Move = PlayCardMove | MakeBidMove | PassBidMove | MakeAnnouncementMove;
+export interface PassAnnouncementMove {
+  type: 'PASS_ANNOUNCEMENT';
+}
+
+export interface ChooseTalonMove {
+  type:   'CHOOSE_TALON';
+  choice: 'first' | 'second';
+}
+
+export interface DiscardCardMove {
+  type: 'DISCARD_CARD';
+  card: Card;
+}
+
+export interface ChooseContractMove {
+  type:     'CHOOSE_CONTRACT';
+  contract: string;
+}
+
+export interface KontraMove {
+  type:   'KONTRA';
+  target: string;   // 'game' | announced bonus name
+}
+
+export type DeclaringSubAction =
+  | { type: 'MAKE_ANNOUNCEMENT'; announcement: string }
+  | { type: 'KONTRA'; target: string };
+
+// Batch declaring turn: empty array = pass; non-empty = all chosen announcements + kontras.
+export interface SubmitDeclarationMove {
+  type:    'SUBMIT_DECLARATION';
+  actions: DeclaringSubAction[];
+}
+
+// Batch discard: exactly 3 cards submitted simultaneously.
+export interface SubmitDiscardsMove {
+  type:  'SUBMIT_DISCARDS';
+  cards: Card[];
+}
+
+export type Move =
+  | PlayCardMove
+  | MakeBidMove
+  | PassBidMove
+  | MakeAnnouncementMove
+  | PassAnnouncementMove
+  | ChooseTalonMove
+  | DiscardCardMove
+  | ChooseContractMove
+  | KontraMove
+  | SubmitDeclarationMove
+  | SubmitDiscardsMove;
 
 // ── Events (server → clients) ─────────────────────────────────────────────────
 //
@@ -179,6 +230,17 @@ export interface CardRevealedEvent {
   card:   Card;
 }
 
+// One batch of face-down cards dealt from dealer to a player's hand or strawman pile.
+// No card values — safe for public game state.
+export interface DealEvent {
+  type:   'DEAL';
+  dealer: number;              // engine player index of the dealer
+  to:     number;              // destination player
+  zone:   'hand' | 'strawman';
+  pile?:  number;              // only when zone === 'strawman'
+  count:  number;              // number of cards in this batch
+}
+
 export type BareEvent =
   | GameStartedEvent
   | HandStartedEvent
@@ -193,11 +255,20 @@ export type BareEvent =
   | HandScoredEvent
   | GameOverEvent
   | TurnChangedEvent
-  | CardRevealedEvent;
+  | CardRevealedEvent
+  | DealEvent;
 
 // ── Game phases ───────────────────────────────────────────────────────────────
 
-export type GamePhase = 'bidding' | 'playing' | 'hand_over' | 'game_over';
+export type GamePhase =
+  | 'bidding'
+  | 'contract_choice'
+  | 'exchange'
+  | 'discard'
+  | 'declaring'
+  | 'playing'
+  | 'hand_over'
+  | 'game_over';
 
 // ── Engine contract ───────────────────────────────────────────────────────────
 //

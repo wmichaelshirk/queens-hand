@@ -221,6 +221,57 @@ export function animateFlipReveal(
 }
 
 /**
+ * Animate `count` face-down ghost cards flying from the dealer to a destination.
+ * Staggered for batches; resolves after the last ghost finishes its flight.
+ */
+export async function animateDeal(
+  dealer: number,
+  to: number,
+  zone: 'hand' | 'strawman',
+  pile: number,
+  count: number,
+): Promise<void> {
+  const srcEl =
+    document.querySelector(`[data-hand-area="${dealer}"]`) ??
+    document.querySelector(`[data-player-token="${dealer}"]`);
+  const dstEl = zone === 'hand'
+    ? (document.querySelector(`[data-hand-area="${to}"]`) ??
+       document.querySelector(`[data-player-token="${to}"]`))
+    : document.querySelector(`[data-pile-player="${to}"][data-pile-index="${pile}"]`);
+
+  if (!srcEl || !dstEl) return;
+
+  const srcRect = srcEl.getBoundingClientRect();
+  const dstRect = dstEl.getBoundingClientRect();
+  const dx = (dstRect.left + dstRect.width  / 2) - (srcRect.left + srcRect.width  / 2);
+  const dy = (dstRect.top  + dstRect.height / 2) - (srcRect.top  + srcRect.height / 2);
+  const stagger = Math.min(70, 300 / count);
+
+  const flights = Array.from({ length: count }, (_, i) =>
+    new Promise<void>((resolve) => {
+      setTimeout(() => {
+        const ghost = document.createElement('div');
+        ghost.style.cssText = [
+          'position:fixed', 'z-index:9998', 'pointer-events:none',
+          'width:65px', 'height:91px', 'border-radius:7px',
+          'background:#1a3464', 'border:1px solid #0f244a',
+          `left:${srcRect.left + srcRect.width  / 2 - 32}px`,
+          `top:${srcRect.top  + srcRect.height / 2 - 45}px`,
+        ].join(';');
+        document.body.appendChild(ghost);
+        gsap.to(ghost, {
+          x: dx, y: dy, scale: 0.85,
+          duration: 0.2, ease: 'power2.out',
+          onComplete: () => { ghost.remove(); resolve(); },
+        });
+      }, i * stagger);
+    })
+  );
+
+  await Promise.all(flights);
+}
+
+/**
  * Fade-in a card that just arrived in a hand area after a CARDS_MOVED update.
  * Called after displayState is updated and tick() has been awaited.
  */
