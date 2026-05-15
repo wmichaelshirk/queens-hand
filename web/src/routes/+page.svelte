@@ -96,12 +96,13 @@
 
   // ── Tables ────────────────────────────────────────────────────────────────────
 
-  type TableSeat = { seatIndex: number; playerId: string; displayName: string; isBot: boolean };
+  type TableSeat = { seatIndex: number; playerId: string; displayName: string; isBot: boolean; ready: boolean };
   type ActiveTable = {
     _id: string;
     gameType: "slobberhannes" | "strohmandeln";
     status: "waiting" | "active";
     seatCount: number;
+    minSeatCount: number;
     createdAt: number;
     seats: TableSeat[];
   };
