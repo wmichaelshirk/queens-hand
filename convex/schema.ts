@@ -78,6 +78,8 @@ export default defineSchema({
     })),
     recentEvents: v.optional(v.array(v.any())),
     dealer: v.optional(v.number()),
+    currentBid: v.optional(v.string()),
+    declarer: v.optional(v.number()),
   })
     .index("by_game", ["gameId"]),
 

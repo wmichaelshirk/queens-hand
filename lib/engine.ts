@@ -5,11 +5,14 @@
  * TMove  — move type (must be an object; used as Map key via JSON serialisation by default).
  *
  * Engines should verify conformance at module level with a type-annotated constant:
- *   const _: ISMCTSEngine<State, Move> = { getLegalMoves, applyMove, isHandOver, determinize, getReward };
+ *   const _: ISMCTSEngine<State, Move> = { getLegalMoves, applyMove, isHandOver, determinize, getReward, getCurrentPlayer };
  */
 export interface ISMCTSEngine<TState, TMove extends object> {
   /** All moves the current player may legally make. Empty in terminal states. */
   getLegalMoves(state: TState): TMove[];
+
+  /** Index of the player whose turn it is to move. Used by ISMCTS for paranoid (adversarial) selection. */
+  getCurrentPlayer(state: TState): number;
 
   /**
    * Transition function: apply move, return next state (and optionally presentation events).

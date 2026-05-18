@@ -2,7 +2,7 @@
   import type { Move, Card, GameState } from '$lib/gameTypes';
   import { getSlotForSeat } from '$lib/tableLayout';
   import { tarockSort } from '$lib/cardSort';
-  import PlayerToken from './PlayerToken.svelte';
+  import PlayerZone from './PlayerZone.svelte';
   import Trick from './Trick.svelte';
   import HandCards from './HandCards.svelte';
   import PlayingCard from './PlayingCard.svelte';
@@ -39,6 +39,7 @@
   const leftSeats    = $derived(seatSlots.filter(s => s.slot === 'left'));
   const rightSeats   = $derived(seatSlots.filter(s => s.slot === 'right'));
   const myBottomSeat = $derived(seatSlots.find(s => s.slot === 'bottom'));
+  const declarerEngineIdx = $derived(displayState.publicState.declarer);
 
   // Talon exchange: choose first or second group
   const talonMoves = $derived(
@@ -99,8 +100,8 @@
   {#if topRowSeats.length > 0}
     <div class="top-row">
       {#each topRowSeats as seat (seat.seatIndex)}
-        <div data-player-token={seat.enginePlayerIndex}>
-          <PlayerToken
+        <div data-player-zone={seat.enginePlayerIndex}>
+          <PlayerZone
             name={seat.displayName}
             isBot={seat.isBot}
             cardCount={seat.handSize}
@@ -108,6 +109,8 @@
             score={displayState.publicState.scores[seat.enginePlayerIndex] ?? 0}
             isCurrentTurn={seat.enginePlayerIndex === displayState.publicState.currentTurn}
             isDealer={seat.enginePlayerIndex === displayState.publicState.dealer}
+            isDeclarer={seat.enginePlayerIndex === declarerEngineIdx}
+            declarerActive={declarerEngineIdx !== undefined}
           />
         </div>
       {/each}
@@ -118,8 +121,8 @@
   <div class="middle-row">
     <div class="side-left">
       {#each leftSeats as seat (seat.seatIndex)}
-        <div data-player-token={seat.enginePlayerIndex}>
-          <PlayerToken
+        <div data-player-zone={seat.enginePlayerIndex}>
+          <PlayerZone
             name={seat.displayName}
             isBot={seat.isBot}
             cardCount={seat.handSize}
@@ -127,6 +130,8 @@
             score={displayState.publicState.scores[seat.enginePlayerIndex] ?? 0}
             isCurrentTurn={seat.enginePlayerIndex === displayState.publicState.currentTurn}
             isDealer={seat.enginePlayerIndex === displayState.publicState.dealer}
+            isDeclarer={seat.enginePlayerIndex === declarerEngineIdx}
+            declarerActive={declarerEngineIdx !== undefined}
           />
         </div>
       {/each}
@@ -138,29 +143,34 @@
         {@const talon = displayState.talon}
         {@const canChoose = isMyTurn && talonMoves.length > 0}
         <div class="talon-area">
-          <div class="talon-label">{talon.revealed ? 'Choose a talon group' : 'Talon'}</div>
+          <div class="talon-label">
+            {talon.revealed
+              ? (talonMoves.length > 0 ? 'Choose a talon group' : 'Rejected talon')
+              : 'Talon'}
+          </div>
           <div class="talon-groups">
-            {#each ([0, 1] as const) as gi}
-              {@const move = talonMoves.find(m => m.choice === (gi === 0 ? 'first' : 'second'))}
-              <div
-                class="talon-group"
-                class:talon-choosable={canChoose && !!move}
-                role={canChoose && move ? 'button' : undefined}
-                tabindex={canChoose && move ? 0 : undefined}
-                onclick={canChoose && move ? () => onPlayMove(move) : undefined}
-                onkeydown={canChoose && move ? (e) => e.key === 'Enter' && !busy && onPlayMove(move) : undefined}
-              >
-                {#if talon.revealed && talon.groups[gi]?.length}
-                  {#each talon.groups[gi] as card}
-                    <PlayingCard {card} />
-                  {/each}
-                {:else}
-                  <PlayingCard />
-                  <PlayingCard />
-                  <PlayingCard />
+            {#if !talon.revealed}
+              <div class="talon-group"><PlayingCard /><PlayingCard /><PlayingCard /></div>
+              <div class="talon-group"><PlayingCard /><PlayingCard /><PlayingCard /></div>
+            {:else}
+              {#each ([0, 1] as const) as gi}
+                {#if talon.groups[gi]?.length}
+                  {@const move = talonMoves.find(m => m.choice === (gi === 0 ? 'first' : 'second'))}
+                  <div
+                    class="talon-group"
+                    class:talon-choosable={canChoose && !!move}
+                    role={canChoose && move ? 'button' : undefined}
+                    tabindex={canChoose && move ? 0 : undefined}
+                    onclick={canChoose && move ? () => onPlayMove(move) : undefined}
+                    onkeydown={canChoose && move ? (e) => e.key === 'Enter' && !busy && onPlayMove(move) : undefined}
+                  >
+                    {#each talon.groups[gi] as card}
+                      <PlayingCard {card} />
+                    {/each}
+                  </div>
                 {/if}
-              </div>
-            {/each}
+              {/each}
+            {/if}
           </div>
         </div>
       {/if}
@@ -180,8 +190,8 @@
 
     <div class="side-right">
       {#each rightSeats as seat (seat.seatIndex)}
-        <div data-player-token={seat.enginePlayerIndex}>
-          <PlayerToken
+        <div data-player-zone={seat.enginePlayerIndex}>
+          <PlayerZone
             name={seat.displayName}
             isBot={seat.isBot}
             cardCount={seat.handSize}
@@ -189,6 +199,8 @@
             score={displayState.publicState.scores[seat.enginePlayerIndex] ?? 0}
             isCurrentTurn={seat.enginePlayerIndex === displayState.publicState.currentTurn}
             isDealer={seat.enginePlayerIndex === displayState.publicState.dealer}
+            isDeclarer={seat.enginePlayerIndex === declarerEngineIdx}
+            declarerActive={declarerEngineIdx !== undefined}
           />
         </div>
       {/each}
@@ -198,8 +210,8 @@
   <!-- Row 3: my seat + bid/announce buttons + hand -->
   <div class="bottom-row">
     {#if myBottomSeat}
-      <div data-player-token={myBottomSeat.enginePlayerIndex}>
-        <PlayerToken
+      <div data-player-zone={myBottomSeat.enginePlayerIndex}>
+        <PlayerZone
           name={myBottomSeat.displayName}
           isBot={myBottomSeat.isBot}
           cardCount={0}
@@ -207,6 +219,8 @@
           score={displayState.publicState.scores[myBottomSeat.enginePlayerIndex] ?? 0}
           isCurrentTurn={isMyTurn}
           isDealer={myBottomSeat.enginePlayerIndex === displayState.publicState.dealer}
+          isDeclarer={myBottomSeat.enginePlayerIndex === declarerEngineIdx}
+          declarerActive={declarerEngineIdx !== undefined}
         />
       </div>
     {/if}

@@ -222,13 +222,18 @@
   }
 
   function moveLabel(move: Move): string {
-    if (move.type === 'MAKE_BID') return move.bid;
+    if (move.type === 'MAKE_BID') {
+      return move.bid === ($gameState!.publicState.currentBid ?? null) ? 'Hold' : move.bid;
+    }
     if (move.type === 'PASS_BID') return 'Pass';
     if (move.type === 'PASS_ANNOUNCEMENT') return 'Pass';
     if (move.type === 'MAKE_ANNOUNCEMENT') return move.announcement;
     if (move.type === 'CHOOSE_CONTRACT') return move.contract;
     if (move.type === 'CHOOSE_TALON') return move.choice === 'first' ? 'First Half' : 'Second Half';
-    if (move.type === 'KONTRA') return move.target === 'game' ? 'Kontra' : `Kontra: ${move.target}`;
+    if (move.type === 'KONTRA') {
+      const lvl = (move as any).level ?? 'Kontra';
+      return move.target === 'game' ? lvl : `${lvl}: ${move.target}`;
+    }
     return '?';
   }
 
@@ -552,12 +557,14 @@
             ...displayState!,
             myHand: [...displayState!.myHand, ...addedToMyHand],
             strawmen,
+            talon: toState.talon,
           };
         } else {
           displayState = {
             ...displayState!,
             myHand: toState.myHand,
             strawmen: toState.strawmen,
+            talon: toState.talon,
           };
         }
 

@@ -2,7 +2,7 @@
   import type { Move, GameState } from '$lib/gameTypes';
   import { getSlotForSeat } from '$lib/tableLayout';
   import { whistSort } from '$lib/cardSort';
-  import PlayerToken from './PlayerToken.svelte';
+  import PlayerZone from './PlayerZone.svelte';
   import Trick from './Trick.svelte';
   import HandCards from './HandCards.svelte';
 
@@ -38,6 +38,7 @@
   const leftSeats    = $derived(seatSlots.filter(s => s.slot === 'left'));
   const rightSeats   = $derived(seatSlots.filter(s => s.slot === 'right'));
   const myBottomSeat = $derived(seatSlots.find(s => s.slot === 'bottom'));
+  const declarerEngineIdx = $derived(displayState.publicState.declarer);
 
   function seatName(engineIndex: number): string {
     return displayState.seats.find(s => s.enginePlayerIndex === engineIndex)?.displayName ?? `Player ${engineIndex + 1}`;
@@ -50,8 +51,8 @@
   {#if topRowSeats.length > 0}
     <div class="top-row">
       {#each topRowSeats as seat (seat.seatIndex)}
-        <div data-player-token={seat.enginePlayerIndex}>
-          <PlayerToken
+        <div data-player-zone={seat.enginePlayerIndex}>
+          <PlayerZone
             name={seat.displayName}
             isBot={seat.isBot}
             cardCount={seat.handSize}
@@ -59,6 +60,8 @@
             score={displayState.publicState.scores[seat.enginePlayerIndex] ?? 0}
             isCurrentTurn={seat.enginePlayerIndex === displayState.publicState.currentTurn}
             isDealer={seat.enginePlayerIndex === displayState.publicState.dealer}
+            isDeclarer={seat.enginePlayerIndex === declarerEngineIdx}
+            declarerActive={declarerEngineIdx !== undefined}
           />
         </div>
       {/each}
@@ -69,8 +72,8 @@
   <div class="middle-row">
     <div class="side-left">
       {#each leftSeats as seat (seat.seatIndex)}
-        <div data-player-token={seat.enginePlayerIndex}>
-          <PlayerToken
+        <div data-player-zone={seat.enginePlayerIndex}>
+          <PlayerZone
             name={seat.displayName}
             isBot={seat.isBot}
             cardCount={seat.handSize}
@@ -78,6 +81,8 @@
             score={displayState.publicState.scores[seat.enginePlayerIndex] ?? 0}
             isCurrentTurn={seat.enginePlayerIndex === displayState.publicState.currentTurn}
             isDealer={seat.enginePlayerIndex === displayState.publicState.dealer}
+            isDeclarer={seat.enginePlayerIndex === declarerEngineIdx}
+            declarerActive={declarerEngineIdx !== undefined}
           />
         </div>
       {/each}
@@ -99,8 +104,8 @@
 
     <div class="side-right">
       {#each rightSeats as seat (seat.seatIndex)}
-        <div data-player-token={seat.enginePlayerIndex}>
-          <PlayerToken
+        <div data-player-zone={seat.enginePlayerIndex}>
+          <PlayerZone
             name={seat.displayName}
             isBot={seat.isBot}
             cardCount={seat.handSize}
@@ -108,6 +113,8 @@
             score={displayState.publicState.scores[seat.enginePlayerIndex] ?? 0}
             isCurrentTurn={seat.enginePlayerIndex === displayState.publicState.currentTurn}
             isDealer={seat.enginePlayerIndex === displayState.publicState.dealer}
+            isDeclarer={seat.enginePlayerIndex === declarerEngineIdx}
+            declarerActive={declarerEngineIdx !== undefined}
           />
         </div>
       {/each}
@@ -117,8 +124,8 @@
   <!-- Row 3: my seat + hand -->
   <div class="bottom-row">
     {#if myBottomSeat}
-      <div data-player-token={myBottomSeat.enginePlayerIndex}>
-        <PlayerToken
+      <div data-player-zone={myBottomSeat.enginePlayerIndex}>
+        <PlayerZone
           name={myBottomSeat.displayName}
           isBot={myBottomSeat.isBot}
           cardCount={0}
@@ -126,6 +133,8 @@
           score={displayState.publicState.scores[myBottomSeat.enginePlayerIndex] ?? 0}
           isCurrentTurn={isMyTurn}
           isDealer={myBottomSeat.enginePlayerIndex === displayState.publicState.dealer}
+          isDeclarer={myBottomSeat.enginePlayerIndex === declarerEngineIdx}
+          declarerActive={declarerEngineIdx !== undefined}
         />
       </div>
     {/if}

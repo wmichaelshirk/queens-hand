@@ -10,7 +10,7 @@ export function wait(ms: number): Promise<void> {
  * Caller must update displayState and call tick() before calling this so the
  * trick card element already exists in the DOM.
  * fromRect: pre-captured position of the card in the hand (own card).
- * If absent, animates from the opponent's player-token area instead.
+ * If absent, animates from the opponent's player-zone area instead.
  */
 export function animatePlayedCard(
   playedCard: { suit: string; rank: string },
@@ -35,7 +35,7 @@ export function animatePlayedCard(
       clearProps: 'transform,opacity',
     });
   } else {
-    const sourceEl = document.querySelector(`[data-player-token="${playerIndex}"]`);
+    const sourceEl = document.querySelector(`[data-player-zone="${playerIndex}"]`);
     if (!sourceEl) return;
     const srcRect = sourceEl.getBoundingClientRect();
     gsap.from(trickCardEl, {
@@ -55,7 +55,7 @@ export function animatePlayedCard(
  * Only targets [data-zone="trick"] cards.
  */
 export function animateTrickToWinner(winnerEngineIndex: number): void {
-  const target = document.querySelector(`[data-player-token="${winnerEngineIndex}"]`);
+  const target = document.querySelector(`[data-player-zone="${winnerEngineIndex}"]`);
   if (!target) return;
   const rect = target.getBoundingClientRect();
   const destX = rect.left + rect.width / 2;
@@ -175,7 +175,7 @@ export function animateFlipReveal(
 
   const handEl =
     document.querySelector(`[data-hand-area="${pilePlayerIndex}"]`) ??
-    document.querySelector(`[data-player-token="${pilePlayerIndex}"]`);
+    document.querySelector(`[data-player-zone="${pilePlayerIndex}"]`);
 
   const slideToHand = (): Promise<void> => {
     const ghostRect = ghost.getBoundingClientRect();
@@ -233,10 +233,10 @@ export async function animateDeal(
 ): Promise<void> {
   const srcEl =
     document.querySelector(`[data-hand-area="${dealer}"]`) ??
-    document.querySelector(`[data-player-token="${dealer}"]`);
+    document.querySelector(`[data-player-zone="${dealer}"]`);
   const dstEl = zone === 'hand'
     ? (document.querySelector(`[data-hand-area="${to}"]`) ??
-       document.querySelector(`[data-player-token="${to}"]`))
+       document.querySelector(`[data-player-zone="${to}"]`))
     : document.querySelector(`[data-pile-player="${to}"][data-pile-index="${pile}"]`);
 
   if (!srcEl || !dstEl) return;

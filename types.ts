@@ -81,11 +81,12 @@ export interface ChooseContractMove {
 export interface KontraMove {
   type:   'KONTRA';
   target: string;   // 'game' | announced bonus name
+  level?: 'Kontra' | 'Rekontra' | 'Subkontra';   // display hint; does not affect move equality
 }
 
 export type DeclaringSubAction =
   | { type: 'MAKE_ANNOUNCEMENT'; announcement: string }
-  | { type: 'KONTRA'; target: string };
+  | { type: 'KONTRA'; target: string; level?: 'Kontra' | 'Rekontra' | 'Subkontra' };
 
 // Batch declaring turn: empty array = pass; non-empty = all chosen announcements + kontras.
 export interface SubmitDeclarationMove {

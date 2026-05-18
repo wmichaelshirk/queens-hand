@@ -9,8 +9,8 @@ import { internal } from "./_generated/api";
 import * as Slobberhannes from "../engines/slobberhannes";
 import * as Strohmandeln from "../engines/strohmandeln";
 import * as Dreiertarock from "../engines/dreiertarock";
-import { chooseMove } from "../ai/ismcts";
-import type { Move, Card, BareEvent } from "../types";
+import { chooseMove, evaluateMoves } from "../ai/ismcts";
+import type { Move, Card, BareEvent, DeclaringSubAction } from "../types";
 
 function movesEqual(a: Move, b: Move): boolean {
   if (a.type !== b.type) return false;
@@ -113,6 +113,8 @@ interface EngineAdapter {
   chooseBotMove(state: any, playerIndex: number): Move;
   getHands(state: any): Card[][];
   getHandBreakdown(state: any): NormalizedPlayerBreakdown[] | null;
+  getCurrentBid(state: any): string | null;
+  getDeclarer(state: any): number | null;
 }
 
 const slobberAdapter: EngineAdapter = {
@@ -155,6 +157,8 @@ const slobberAdapter: EngineAdapter = {
     return { type: "PLAY_CARD", card };
   },
   getHands(state) { return state.hands as Card[][]; },
+  getCurrentBid(_state) { return null; },
+  getDeclarer(_state) { return null; },
   getHandBreakdown(state) {
     const breakdown = Slobberhannes.getHandBreakdown(state as Slobberhannes.State);
     // Penalties are negated so delta < 0 means "bad" consistently across all engines.
@@ -208,6 +212,8 @@ const strahAdapter: EngineAdapter = {
     }) as Move;
   },
   getHands(state) { return state.hands as Card[][]; },
+  getCurrentBid(_state) { return null; },
+  getDeclarer(state) { return (state as Strohmandeln.State).declarer; },
   getHandBreakdown(state) {
     const breakdown = Strohmandeln.computeScoreBreakdown(state as Strohmandeln.State);
     if (!breakdown) return null;
@@ -253,11 +259,102 @@ const dreitAdapter: EngineAdapter = {
     return { state: newState, events: Dreiertarock.getDealEvents(newDealerIndex, playerCount) };
   },
   chooseBotMove(state, playerIndex) {
-    return chooseMove(Dreiertarock, state as Dreiertarock.State, playerIndex, {
-      iterations: 200,
-    }) as Move;
+    const s = state as Dreiertarock.State;
+
+    if (s.phase === 'bidding') {
+      const rewards = evaluateMoves(Dreiertarock, s, playerIndex, { iterations: 800, rolloutPolicy: Dreiertarock.rolloutPolicy });
+
+      // Base option: PASS_BID if legal (non-forehand); otherwise MAKE_BID('Single') for forehand
+      const passKey   = JSON.stringify({ type: 'PASS_BID' });
+      const singleKey = JSON.stringify({ type: 'MAKE_BID', bid: 'Single' });
+      const baseEntry = rewards.get(passKey) ?? rewards.get(singleKey);
+      const baseReward = baseEntry?.avgReward ?? 0.5;
+
+      // Only raise if the bid clears its per-level threshold above the base option
+      let bestMove: Move | null = null;
+      let bestReward = -Infinity;
+      for (const [, entry] of rewards) {
+        const m = entry.move as Move;
+        if (m.type !== 'MAKE_BID') continue;
+        const bid = (m as { type: 'MAKE_BID'; bid: string }).bid;
+        if (bid === 'Single' && rewards.has(passKey)) continue;
+        const threshold = bid === 'SoloValat' ? 0.15
+                        : bid === 'Solo'      ? 0.08
+                        : 0.05;
+        if (entry.avgReward >= baseReward + threshold && entry.avgReward > bestReward) {
+          bestMove = m;
+          bestReward = entry.avgReward;
+        }
+      }
+
+      if (bestMove) return bestMove;
+      if (rewards.has(passKey)) return { type: 'PASS_BID' };
+      return { type: 'MAKE_BID', bid: 'Single' } as Move;
+    }
+
+    if (s.phase === 'declaring') {
+      const rewards    = evaluateMoves(Dreiertarock, s, playerIndex, { iterations: 600, rolloutPolicy: Dreiertarock.rolloutPolicy });
+      const passKey    = JSON.stringify({ type: 'PASS_ANNOUNCEMENT' });
+      const passReward = rewards.get(passKey)?.avgReward ?? 0.5;
+
+      // Batch profitable announcements; allow at most one kontra per turn.
+      // Random rollouts overestimate success rates, so require per-move thresholds
+      // above pass rather than any positive margin.
+      const actions: DeclaringSubAction[] = [];
+      let bestKontra: { action: DeclaringSubAction; reward: number } | null = null;
+      for (const [key, entry] of rewards) {
+        if (key === passKey) continue;
+        if (entry.avgReward <= passReward) continue;
+        const m = entry.move as Move;
+        if (m.type === 'MAKE_ANNOUNCEMENT') {
+          const ann = (m as { type: 'MAKE_ANNOUNCEMENT'; announcement: string }).announcement;
+          const threshold = ann === 'Kakadu' ? 0.10
+                          : ann === 'Uhu'    ? 0.08
+                          : ann === 'Pagat'  ? 0.08
+                          : 0.04; // Trull, Kings
+          if (entry.avgReward >= passReward + threshold) {
+            actions.push(m as DeclaringSubAction);
+          }
+        } else if (m.type === 'KONTRA') {
+          const level = (m as { type: 'KONTRA'; level?: string }).level;
+          const threshold = level === 'Subkontra' ? 0.15
+                          : level === 'Rekontra'  ? 0.12
+                          : 0.08; // Kontra
+          if (entry.avgReward >= passReward + threshold) {
+            if (!bestKontra || entry.avgReward > bestKontra.reward) {
+              bestKontra = { action: m as DeclaringSubAction, reward: entry.avgReward };
+            }
+          }
+        }
+      }
+      if (bestKontra) actions.push(bestKontra.action);
+
+      return { type: 'SUBMIT_DECLARATION', actions } as Move;
+    }
+
+    // Forehand choosing between Single and Trischaken after an uncontested auction:
+    // random rollouts slightly inflate Single's apparent value (declared play looks active),
+    // so require a meaningful margin before committing to a declared game.
+    if (s.phase === 'contract_choice') {
+      const rewards      = evaluateMoves(Dreiertarock, s, playerIndex, { iterations: 1500, rolloutPolicy: Dreiertarock.rolloutPolicy });
+      const singleKey    = JSON.stringify({ type: 'CHOOSE_CONTRACT', contract: 'Single' });
+      const trischakenKey = JSON.stringify({ type: 'CHOOSE_CONTRACT', contract: 'Trischaken' });
+      const singleReward    = rewards.get(singleKey)?.avgReward    ?? 0;
+      const trischakenReward = rewards.get(trischakenKey)?.avgReward ?? 0;
+      return (singleReward >= trischakenReward + 0.06
+        ? { type: 'CHOOSE_CONTRACT', contract: 'Single' }
+        : { type: 'CHOOSE_CONTRACT', contract: 'Trischaken' }) as Move;
+    }
+
+    // One-shot decisions (exchange, discard) get far more iterations than repeated trick plays
+    const iterations = s.phase === 'exchange' ? 1500
+                     : s.phase === 'discard'  ? 1000
+                     : 400;
+    return chooseMove(Dreiertarock, s, playerIndex, { iterations, rolloutPolicy: Dreiertarock.rolloutPolicy }) as Move;
   },
   getHands(state) { return state.hands as Card[][]; },
+  getCurrentBid(state) { return (state as Dreiertarock.State).currentBid ?? null; },
+  getDeclarer(state) { return (state as Dreiertarock.State).declarer; },
   getHandBreakdown(state) {
     const breakdown = Dreiertarock.computeScoreBreakdown(state as Dreiertarock.State);
     if (!breakdown) return null;
@@ -317,13 +414,17 @@ function formatEvents(events: BareEvent[], seatNames: string[]): string[] {
         }
         break;
       case "ANNOUNCEMENT_MADE":
-        msgs.push(`${name(ev.player)} announced ${ev.announcement}`);
+        msgs.push(ev.announcement === 'pass'
+          ? `${name(ev.player)} passed`
+          : `${name(ev.player)} announced ${ev.announcement}`);
         break;
       case "CARDS_MOVED":
         if (ev.reason === 'talon-exchange') {
-          const takerTransfer = ev.transfers.find(t => t.to.zone === 'hand');
-          if (takerTransfer && takerTransfer.to.zone === 'hand') {
-            msgs.push(`${name(takerTransfer.to.player)} took the talon`);
+          const taken = ev.transfers.filter(t => t.to.zone === 'hand');
+          if (taken.length > 0) {
+            const player = (taken[0]!.to as { zone: 'hand'; player: number }).player;
+            const cards = taken.map(t => `${t.card.rank}${t.card.suit}`).join(' ');
+            msgs.push(`${name(player)} took ${cards}`);
           }
         } else {
           for (const t of ev.transfers) {
@@ -378,6 +479,7 @@ async function _startGame(
 
   const currentPlayer = adapter.getCurrentPlayer(state);
   const startEvents = events.filter((e: BareEvent) => ANIMATION_EVENT_FILTER.has(e.type));
+  const startBid = adapter.getCurrentBid(state);
   await ctx.db.insert("game_public_state", {
     gameId,
     currentTrick: state.currentTrick ?? [],
@@ -387,6 +489,7 @@ async function _startGame(
     trickNum: state.trickNum ?? 0,
     phase: state.phase ?? "playing",
     recentEvents: startEvents,
+    ...(startBid != null ? { currentBid: startBid as string } : {}),
   });
 
   const hands = adapter.getHands(state);
@@ -737,8 +840,27 @@ export const getMyGameState = query({
       } else if (phase === "exchange") {
         // Both groups are publicly revealed so declarer can choose
         talon = { revealed: true, groups: liveState.state.talonGroups as [Card[], Card[]] };
+      } else if (phase === "discard") {
+        // Rejected half stays on the board while the declarer discards
+        const declarer = liveState.state.declarer as number;
+        const activePlayers = liveState.state.activePlayers as number[];
+        const firstDefender = activePlayers.find((p: number) => p !== declarer)!;
+        const defCapKeys = new Set(
+          ((liveState.state.capturedCards as Card[][])[firstDefender] ?? [])
+            .map((c: Card) => c.suit + c.rank)
+        );
+        const talonGroups = liveState.state.talonGroups as [Card[], Card[]];
+        const rejectedIdx = talonGroups.findIndex(g => g.every(c => defCapKeys.has(c.suit + c.rank)));
+        if (rejectedIdx !== -1) {
+          const rejected = talonGroups[rejectedIdx]!;
+          const groups: [Card[], Card[]] = rejectedIdx === 0 ? [rejected, []] : [[], rejected];
+          talon = { revealed: true, groups };
+        }
       }
     }
+
+    const liveCurrentBid = liveState ? adapter.getCurrentBid(liveState.state) : null;
+    const liveDeclarer = liveState ? adapter.getDeclarer(liveState.state) : null;
 
     return {
       publicState: {
@@ -750,6 +872,8 @@ export const getMyGameState = query({
         phase: publicState.phase,
         lastCompletedTrick: (publicState.lastCompletedTrick ?? null) as { plays: { playerIndex: number; card: any }[]; winner: number } | null,
         recentEvents: (publicState.recentEvents ?? []) as BareEvent[],
+        currentBid: liveCurrentBid,
+        ...(liveDeclarer !== null ? { declarer: liveDeclarer } : {}),
       },
       myHand,
       legalMoves,
@@ -1313,6 +1437,8 @@ async function _updatePublicAndHands(
     .unique();
 
   const filteredEvents = (recentEvents ?? []).filter(e => ANIMATION_EVENT_FILTER.has(e.type));
+  const patchBid = adapter.getCurrentBid(state);
+  const patchDeclarer = adapter.getDeclarer(state);
 
   if (publicRow) {
     await ctx.db.patch(publicRow._id, {
@@ -1324,6 +1450,8 @@ async function _updatePublicAndHands(
       phase: state.phase ?? "playing",
       ...(lastTrickPatch !== undefined ? { lastCompletedTrick: lastTrickPatch } : {}),
       recentEvents: filteredEvents,
+      ...(patchBid != null ? { currentBid: patchBid as string } : {}),
+      ...(patchDeclarer !== null ? { declarer: patchDeclarer as number } : {}),
     });
   }
 
@@ -1522,6 +1650,7 @@ async function _startNextHand(
   const nextAdapter = getAdapter(game.gameType as GameType);
   const currentPlayer = nextAdapter.getCurrentPlayer(newState);
   const handStartEvents = dealEvents.filter((e) => ANIMATION_EVENT_FILTER.has(e.type));
+  const nextBid = nextAdapter.getCurrentBid(newState);
   await ctx.db.insert("game_public_state", {
     gameId,
     currentTrick: newState.currentTrick ?? [],
@@ -1531,6 +1660,7 @@ async function _startNextHand(
     trickNum: newState.trickNum ?? 0,
     phase: newState.phase ?? "bidding",
     recentEvents: handStartEvents,
+    ...(nextBid != null ? { currentBid: nextBid as string } : {}),
   });
 
   const hands = newState.hands as Card[][];
@@ -1712,6 +1842,8 @@ export const applyBotMoves = internalAction({
       if (!result.nextIsBot) break;
       if (result.trickJustResolved) {
         await new Promise<void>(r => setTimeout(r, 1200));
+      } else if (info.phase === 'declaring' || info.phase === 'bidding') {
+        await new Promise<void>(r => setTimeout(r, 600));
       }
     }
   },

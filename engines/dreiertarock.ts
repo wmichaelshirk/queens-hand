@@ -50,10 +50,10 @@
  *   In Solo and Solo Valat, there is no exchange; the talon is set aside.
  *
  * DECLARING PHASE  (after exchange/discard; before any tricks)
- *   Players take turns in circular order starting from eldest hand (forehand).
+ *   Players take turns in circular order starting from the declarer (forehand in Trischaken).
  *   Any player may announce a bonus (if they hold the required card) or Kontra any
- *   eligible target, or simply pass.  The phase ends when all active players pass
- *   consecutively without any new action (consecutivePasses === activePlayerCount).
+ *   eligible target, or simply pass.  The phase ends when 2 players pass consecutively
+ *   (consecutivePasses >= activePlayerCount - 1).
  *
  *   Announcements (cannot announce Mond Fang — it is always automatic):
  *     Pagat   — hold Tarock I
@@ -206,6 +206,8 @@ export interface HandSummary {
   uhuWinner:         number | null;
   kakaduWinner:      number | null;
   mondFangWinner:    number | null;
+  trullWinner:       number | null;       // who captured all 3 Trull cards (★, XXI, I)
+  kingsWinner:       number | null;       // who captured all 4 Kings
   announcements:     Announcement[];
   kontraItems:       KontraItem[];
   scoring:           ScoringSystemName;
@@ -248,6 +250,7 @@ export interface State {
   biddingQueue:  number[];        // active players not yet entered the auction
   isInPair:      boolean;         // true: bidder is responding to currentHolder who outbid them
   biddingContested: boolean;      // true once any player other than forehand has bid or responded
+  bidLog:        Array<{ player: number; bid: BidLevel | 'pass' }>;
 
   // Contract
   contract:      Contract | null;
@@ -288,7 +291,7 @@ const TALON_GROUPS   = 2;
 const GROUP_SIZE     = 3;
 const TRICKS_PER_HAND = HAND_SIZE;   // 16 cards × 3 players / 3 per trick = 16
 const DECLARER_WINS_AT = 36;
-const REWARD_SCALE   = 12;  // tanh normalisation; Solo/Valat swing up to ~96
+const REWARD_SCALE   = 24;  // each-against-each; ordinary Double+Pagat ≈ ±24; Solo+bonuses ≈ ±64
 
 // ── Deck + state factory ───────────────────────────────────────────────────────
 
@@ -338,6 +341,7 @@ export function dealState({
     biddingQueue:  activePlayers.slice(1),
     isInPair:      false,
     biddingContested: false,
+    bidLog:        [],
 
     contract:  null,
     declarer:  null,
@@ -420,6 +424,8 @@ function _legalBids(state: State): Move[] {
   const forehand = activePlayers[0]!;
   const isForehandFirstTurn = bidder === forehand && currentBid === null;
 
+  const isBiddersFirstBid = !state.bidLog.some(b => b.player === bidder);
+
   const moves: Move[] = [];
 
   // Forehand cannot pass on their mandatory first bid
@@ -430,10 +436,8 @@ function _legalBids(state: State): Move[] {
   for (const level of BID_LEVELS) {
     if (level === 'Solo' || level === 'SoloValat') {
       // Jump bids: only at your very first opportunity, before you've bid or passed anything.
-      // isInPair=true means you previously held a lower bid and are now responding to being
-      // outbid — you've already committed to a lower level, so Solo is no longer available.
-      if (isInPair) continue;
-      if (currentHolder === bidder) continue;
+      if (!isBiddersFirstBid) continue;
+      if (currentBid && (BID_RANK[currentBid] >= BID_RANK[level])) continue;
       moves.push({ type: 'MAKE_BID', bid: level });
       continue;
     }
@@ -447,6 +451,7 @@ function _legalBids(state: State): Move[] {
       const cur  = BID_RANK[currentBid];
       if (rank < cur) continue;           // below current — never legal
       if (rank > cur + 1) continue;       // multi-step jump — illegal
+      if (isInPair && rank > cur) continue; // responding to outbid: can only hold or pass
       if (rank === cur) {
         // Hold: only when responding to someone who just outbid you
         if (!isInPair || bidder === currentHolder) continue;
@@ -503,7 +508,7 @@ function _legalDeclaringMoves(state: State): Move[] {
     if (!already.has('Uhu')    && hand.some(c => isTarock(c) && c.rank === 'II'))  moves.push({ type: 'MAKE_ANNOUNCEMENT', announcement: 'Uhu' });
     if (!already.has('Kakadu') && hand.some(c => isTarock(c) && c.rank === 'III')) moves.push({ type: 'MAKE_ANNOUNCEMENT', announcement: 'Kakadu' });
     if (!already.has('Trull')  && hand.some(c => isTarock(c) && c.rank === '★'))   moves.push({ type: 'MAKE_ANNOUNCEMENT', announcement: 'Trull' });
-    if (!already.has('Kings'))                                                       moves.push({ type: 'MAKE_ANNOUNCEMENT', announcement: 'Kings' });
+    if (!already.has('Kings'))                                                     moves.push({ type: 'MAKE_ANNOUNCEMENT', announcement: 'Kings' });
   }
 
   // Kontra moves
@@ -511,19 +516,18 @@ function _legalDeclaringMoves(state: State): Move[] {
     const nextLevel = item.multiplier === 1 ? 2 : item.multiplier === 2 ? 4 : item.multiplier === 4 ? 8 : null;
     if (nextLevel === null) continue;
 
+    const levelName = _kontraLevelName(item);
+
     // Determine who "owns" this target (declarer owns 'game' and their own announcements)
     const ownerTeam = _ownerTeam(item.target, state);
     const isOpponent = !ownerTeam.includes(pi);
 
     if (item.multiplier === 1 && isOpponent) {
-      // Kontra by opponent
-      moves.push({ type: 'KONTRA', target: item.target });
+      moves.push({ type: 'KONTRA', target: item.target, level: levelName });
     } else if (item.multiplier === 2 && ownerTeam.includes(pi)) {
-      // Rekontra by owner
-      moves.push({ type: 'KONTRA', target: item.target });
+      moves.push({ type: 'KONTRA', target: item.target, level: levelName });
     } else if (item.multiplier === 4 && isOpponent) {
-      // Subkontra by opponent
-      moves.push({ type: 'KONTRA', target: item.target });
+      moves.push({ type: 'KONTRA', target: item.target, level: levelName });
     }
 
     // Trischaken: each player can Kontra the game independently
@@ -531,7 +535,7 @@ function _legalDeclaringMoves(state: State): Move[] {
       const alreadyKontra = [item.kontraBy, item.rekontraBy, item.subkontraBy].includes(pi);
       if (!alreadyKontra && item.multiplier < 8) {
         if (!moves.some(m => m.type === 'KONTRA' && (m as {target:string}).target === 'game')) {
-          moves.push({ type: 'KONTRA', target: 'game' });
+          moves.push({ type: 'KONTRA', target: 'game', level: levelName });
         }
       }
     }
@@ -556,6 +560,12 @@ function _ownerTeam(target: string, state: State): number[] {
 }
 
 // ── Card play ─────────────────────────────────────────────────────────────────
+
+function _cardRank(c: Card): number {
+  if (isTarock(c)) return TAROCK_RANK_ORDER[c.rank] ?? 0;
+  const order = (BLACK_SUITS as readonly string[]).includes(c.suit) ? BLACK_RANK_ORDER : RED_RANK_ORDER;
+  return order[c.rank] ?? 0;
+}
 
 function _currentTrickWinnerCard(trick: TarockPlay[], ledSuit: string): Card | null {
   if (trick.length === 0) return null;
@@ -642,22 +652,18 @@ function _applyBid(state: State, move: Move, simulate: boolean): EngineResult<St
 
   if (move.type === 'PASS_BID') {
     if (!simulate) events.push({ type: 'BID_PASSED', player: pi });
+    s.bidLog.push({ player: pi, bid: 'pass' });
 
     if (s.isInPair) {
       // Pair ends — current holder wins this pair
       s.isInPair = false;
-      if (s.biddingQueue.length === 0) {
-        _finalizeBidding(s, events, simulate);
-      } else {
-        s.bidder = s.biddingQueue.shift()!;
-      }
-    } else {
-      if (s.biddingQueue.length === 0) {
-        _finalizeBidding(s, events, simulate);
-      } else {
-        s.bidder = s.biddingQueue.shift()!;
-      }
     }
+    if (s.biddingQueue.length === 0) {
+      _finalizeBidding(s, events, simulate);
+    } else {
+      s.bidder = s.biddingQueue.shift()!;
+    }
+    
     return { state: s, events };
   }
 
@@ -665,6 +671,7 @@ function _applyBid(state: State, move: Move, simulate: boolean): EngineResult<St
 
   const level = move.bid as BidLevel;
   if (!simulate) events.push({ type: 'BID_MADE', player: pi, bid: level });
+  s.bidLog.push({ player: pi, bid: level });
 
   const prevHolder = s.currentHolder;
   const prevBid    = s.currentBid;
@@ -681,12 +688,13 @@ function _applyBid(state: State, move: Move, simulate: boolean): EngineResult<St
     s.currentHolder = pi;
     s.biddingContested = s.biddingContested || pi !== s.activePlayers[0]!;
 
-    if (prevHolder !== null) {
-      // Previous holder must now respond
+    if (prevHolder !== null && level !== 'Solo' && level !== 'SoloValat') {
+      // Step bid — previous holder must immediately hold or pass
       s.bidder   = prevHolder;
       s.isInPair = true;
     } else {
-      // First bid: move on to next in queue
+      // Jump bid (Solo/SoloValat) or first bid — previous holder cannot respond;
+      // move on to the next queued player or finalize
       s.isInPair = false;
       if (s.biddingQueue.length === 0) {
         _finalizeBidding(s, events, simulate);
@@ -850,6 +858,36 @@ function _applyDiscard(state: State, move: Move, simulate: boolean): EngineResul
   return { state: s, events };
 }
 
+// ── Declaring helpers ─────────────────────────────────────────────────────────
+
+function _kontraLevelName(item: KontraItem): 'Kontra' | 'Rekontra' | 'Subkontra' {
+  return item.multiplier === 1 ? 'Kontra' : item.multiplier === 2 ? 'Rekontra' : 'Subkontra';
+}
+
+function _applyKontraToItem(
+  item: KontraItem, pi: number, target: string,
+  events: BareEvent[], simulate: boolean
+): void {
+  const levelName = _kontraLevelName(item);
+  item.multiplier = Math.min(item.multiplier * 2, 8) as 1 | 2 | 4 | 8;
+  if      (!item.kontraBy)    item.kontraBy    = pi;
+  else if (!item.rekontraBy)  item.rekontraBy  = pi;
+  else                        item.subkontraBy = pi;
+  if (!simulate) events.push({ type: 'ANNOUNCEMENT_MADE', player: pi, announcement: `${levelName}:${target}` });
+}
+
+function _handleDeclaringPass(s: State, pi: number, events: BareEvent[], simulate: boolean): void {
+  if (!simulate) events.push({ type: 'ANNOUNCEMENT_MADE', player: pi, announcement: 'pass' });
+  const anyDeclared = s.announcements.length > 0 || s.kontraItems.some(k => k.kontraBy !== null);
+  const passThreshold = anyDeclared ? s.activePlayers.length - 1 : s.activePlayers.length;
+  s.consecutivePasses++;
+  if (s.consecutivePasses >= passThreshold) {
+    _enterPlaying(s);
+  } else {
+    s.declaringBidder = _nextActive(s.activePlayers, pi);
+  }
+}
+
 // ── Enter declaring phase ──────────────────────────────────────────────────────
 
 function _enterDeclaring(s: State): void {
@@ -870,22 +908,14 @@ function _applyDeclaring(state: State, move: Move, simulate: boolean): EngineRes
   const pi     = s.declaringBidder;
 
   if (move.type === 'PASS_ANNOUNCEMENT') {
-    s.consecutivePasses++;
-    if (s.consecutivePasses >= s.activePlayers.length) {
-      _enterPlaying(s);
-    } else {
-      s.declaringBidder = _nextActive(s.activePlayers, pi);
-    }
+    _handleDeclaringPass(s, pi, events, simulate);
     return { state: s, events };
   }
 
-  // Any non-pass action resets the consecutive-pass counter
-  s.consecutivePasses = 0;
-
   if (move.type === 'MAKE_ANNOUNCEMENT') {
+    s.consecutivePasses = 0;
     const ann = move.announcement;
     s.announcements.push({ name: ann, player: pi });
-    // Add a kontraItem for this bonus
     s.kontraItems.push({ target: ann, multiplier: 1, kontraBy: null, rekontraBy: null, subkontraBy: null });
     if (!simulate) events.push({ type: 'ANNOUNCEMENT_MADE', player: pi, announcement: ann });
     s.declaringBidder = _nextActive(s.activePlayers, pi);
@@ -893,24 +923,11 @@ function _applyDeclaring(state: State, move: Move, simulate: boolean): EngineRes
   }
 
   if (move.type === 'KONTRA') {
+    s.consecutivePasses = 0;
     const target = move.target;
     const item   = s.kontraItems.find(k => k.target === target);
     if (!item) throw new Error(`Kontra target '${target}' not found`);
-
-    if (state.contract === 'Trischaken') {
-      // Each player independently Kontras game
-      item.multiplier = Math.min(item.multiplier * 2, 8) as 1 | 2 | 4 | 8;
-      if      (!item.kontraBy)    item.kontraBy    = pi;
-      else if (!item.rekontraBy)  item.rekontraBy  = pi;
-      else                        item.subkontraBy = pi;
-    } else {
-      item.multiplier = Math.min(item.multiplier * 2, 8) as 1 | 2 | 4 | 8;
-      if      (!item.kontraBy)    item.kontraBy    = pi;
-      else if (!item.rekontraBy)  item.rekontraBy  = pi;
-      else                        item.subkontraBy = pi;
-    }
-
-    if (!simulate) events.push({ type: 'ANNOUNCEMENT_MADE', player: pi, announcement: `Kontra:${target}` });
+    _applyKontraToItem(item, pi, target, events, simulate);
     s.declaringBidder = _nextActive(s.activePlayers, pi);
     return { state: s, events };
   }
@@ -919,12 +936,7 @@ function _applyDeclaring(state: State, move: Move, simulate: boolean): EngineRes
     const actions = move.actions as DeclaringSubAction[];
     if (actions.length === 0) {
       // Empty batch = pass
-      s.consecutivePasses++;
-      if (s.consecutivePasses >= s.activePlayers.length) {
-        _enterPlaying(s);
-      } else {
-        s.declaringBidder = _nextActive(s.activePlayers, pi);
-      }
+      _handleDeclaringPass(s, pi, events, simulate);
       return { state: s, events };
     }
 
@@ -943,11 +955,7 @@ function _applyDeclaring(state: State, move: Move, simulate: boolean): EngineRes
     for (const k of kontras) {
       const item = s.kontraItems.find(ki => ki.target === k.target);
       if (!item) throw new Error(`Kontra target '${k.target}' not found in batch`);
-      item.multiplier = Math.min(item.multiplier * 2, 8) as 1 | 2 | 4 | 8;
-      if      (!item.kontraBy)    item.kontraBy    = pi;
-      else if (!item.rekontraBy)  item.rekontraBy  = pi;
-      else                        item.subkontraBy = pi;
-      if (!simulate) events.push({ type: 'ANNOUNCEMENT_MADE', player: pi, announcement: `Kontra:${k.target}` });
+      _applyKontraToItem(item, pi, k.target, events, simulate);
     }
 
     s.declaringBidder = _nextActive(s.activePlayers, pi);
@@ -1080,6 +1088,24 @@ function _computeHandSummary(s: State): HandSummary {
     if (hasSküs && hasMond) { mondFangWinner = winner; break; }
   }
 
+  // Trull winner: whoever captured all 3 Trull cards (Sküs ★, Mond XXI, Pagat I)
+  let trullWinner: number | null = null;
+  for (const pi of activePlayers) {
+    const cap = capturedCards[pi] ?? [];
+    if (['★', 'XXI', 'I'].every(r => cap.some(c => isTarock(c) && c.rank === r))) {
+      trullWinner = pi; break;
+    }
+  }
+
+  // Kings winner: whoever captured all 4 Kings
+  let kingsWinner: number | null = null;
+  for (const pi of activePlayers) {
+    const cap = capturedCards[pi] ?? [];
+    if (['♣', '♠', '♥', '♦'].every(s => cap.some(c => c.rank === 'K' && c.suit === s))) {
+      kingsWinner = pi; break;
+    }
+  }
+
   return {
     contract:          contract!,
     declarer,
@@ -1091,6 +1117,8 @@ function _computeHandSummary(s: State): HandSummary {
     uhuWinner:         birdWinnerAtPos(trickLog, 2, 'II'),
     kakaduWinner:      birdWinnerAtPos(trickLog, 3, 'III'),
     mondFangWinner,
+    trullWinner,
+    kingsWinner,
     announcements,
     kontraItems,
     scoring,
@@ -1143,8 +1171,8 @@ function _scoreTrischaken(summary: HandSummary, deltas: Record<number, number>, 
     for (const w of winners) {
       for (const other of activePlayers) {
         if (other !== w) {
-          deltas[w]!     += payment;
-          deltas[other]! -= payment;
+          deltas[w]!     -= payment;
+          deltas[other]! += payment;
         }
       }
     }
@@ -1180,19 +1208,30 @@ function _scoreDeclaredGame(summary: HandSummary, deltas: Record<number, number>
     gameScore = (won ? 1 : -1) * gameValues[contract] * gameMult;
   }
 
-  deltas[declarer]! += gameScore;
+  // Each-against-each: declarer receives/pays per defender
+  deltas[declarer]! += gameScore * defenders.length;
   for (const d of defenders) deltas[d]! -= gameScore;
 
-  // Bonuses
+  // Bonuses — same each-against-each settlement
   const _applyBonus = (winner: number | null, name: string, baseVal: number) => {
-    if (winner === null) return;
-    const announced = summary.announcements.some(a => a.name === name && a.player === winner);
-    const kontra    = _bonusKontraMultiplier(summary.kontraItems, name);
-    const soloMult  = isSolo ? 2 : 1;
-    const annMult   = announced ? 2 : 1;
-    const value     = baseVal * soloMult * annMult * kontra;
-    const sign      = winner === declarer ? 1 : -1;
-    deltas[declarer]! += sign * value;
+    const ann      = summary.announcements.find(a => a.name === name) ?? null;
+    const announced = ann !== null;
+    if (winner === null && !announced) return;
+
+    const kontra   = _bonusKontraMultiplier(summary.kontraItems, name);
+    const soloMult = isSolo ? 2 : 1;
+    const annMult  = announced ? 2 : 1;
+    const value    = baseVal * soloMult * annMult * kontra;
+
+    // If nobody won but it was announced → announcer's team pays (failure penalty).
+    // Failure is also triggered when someone ELSE won, but that's the normal winner path
+    // with doubled stakes (the announcement doubled the value for whoever wins).
+    const effectiveWinner: number = winner !== null
+      ? winner
+      : ann!.player === declarer ? defenders[0]! : declarer;
+
+    const sign = effectiveWinner === declarer ? 1 : -1;
+    deltas[declarer]! += sign * value * defenders.length;
     for (const d of defenders) deltas[d]! -= sign * value;
   };
 
@@ -1204,8 +1243,8 @@ function _scoreDeclaredGame(summary: HandSummary, deltas: Record<number, number>
       _applyBonus(summary.uhuWinner,         'Uhu',      6);
       _applyBonus(summary.kakaduWinner,      'Kakadu',   8);
       _applyBonus(summary.mondFangWinner,    'MondFang', 1);
-      _applyBonus(_trullWinner(summary),     'Trull',    1);
-      _applyBonus(_kingsWinner(summary),     'Kings',    1);
+      _applyBonus(summary.trullWinner,       'Trull',    1);
+      _applyBonus(summary.kingsWinner,       'Kings',    1);
     } else {
       // StLouis — Trull and Kings do not score
       _applyBonus(summary.pagatUltimoWinner, 'Pagat',    1);
@@ -1216,23 +1255,6 @@ function _scoreDeclaredGame(summary: HandSummary, deltas: Record<number, number>
   }
 }
 
-function _trullWinner(summary: HandSummary): number | null {
-  const ann = summary.announcements.find(a => a.name === 'Trull');
-  if (ann) {
-    // Check if the announcer succeeded (held all three at the end — approximated as having all in captures)
-    // In Dreiertarock, "Trull announced" means the announcer must capture all of {★, XXI, I}.
-    // For simplicity: if announced, track via captured cards.
-    return ann.player; // scoring system treats announced = scored at end
-  }
-  return null;
-}
-
-function _kingsWinner(summary: HandSummary): number | null {
-  const ann = summary.announcements.find(a => a.name === 'Kings');
-  if (ann) return ann.player;
-  return null;
-}
-
 // ── Score breakdown (for display) ─────────────────────────────────────────────
 
 export interface PlayerScoreBreakdown {
@@ -1240,6 +1262,141 @@ export interface PlayerScoreBreakdown {
   role:   'declarer' | 'defender' | 'none';
   items:  Array<{ label: string; delta: number }>;
   total:  number;
+}
+
+function _buildBreakdownItems(summary: HandSummary, pi: number): Array<{ label: string; delta: number }> {
+  const items: Array<{ label: string; delta: number }> = [];
+  const { contract, declarer, activePlayers, cardPoints, scoring, valatWinner, kontraItems, announcements } = summary;
+
+  // Card points — informational (delta = 0, displays as "—" in the modal)
+  items.push({ label: `Card pts: ${cardPoints[pi] ?? 0}`, delta: 0 });
+
+  if (contract === 'Trischaken') {
+    const gameMult  = _gameKontraMultiplier(kontraItems);
+    const baseValue = scoring === 'StLouis' ? 1 : 3;
+    const payment   = baseValue * gameMult;
+
+    const zeroPts = activePlayers.filter(p => cardPoints[p] === 0);
+    const maxPts  = Math.max(...activePlayers.map(p => cardPoints[p]!));
+    const winners = activePlayers.filter(p => cardPoints[p] === maxPts);
+
+    let label: string;
+    let delta: number;
+
+    if (zeroPts.includes(pi)) {
+      // Each non-zero player pays this player once
+      const nonZeroCount = activePlayers.length - zeroPts.length;
+      delta = nonZeroCount * payment;
+      label = '0 pts ✓';
+    } else if (zeroPts.length > 0) {
+      // Pay each zero-pt player once
+      delta = -(zeroPts.length * payment);
+      label = 'Trischaken (paid)';
+    } else if (winners.includes(pi)) {
+      // Pay each non-winner once
+      const nonWinnerCount = activePlayers.length - winners.length;
+      delta = -(nonWinnerCount * payment);
+      label = 'Most pts ✗';
+    } else {
+      // Receive from each winner once
+      delta = winners.length * payment;
+      label = 'Trischaken ✓';
+    }
+
+    if (gameMult > 1) label += ` ×${gameMult}`;
+    items.push({ label, delta });
+    return items;
+  }
+
+  // Declared game
+  if (declarer === null) return items;
+  const defenders  = activePlayers.filter(p => p !== declarer);
+  const isSolo     = contract === 'Solo' || contract === 'SoloValat';
+  const gameValues = scoring === 'StLouis' ? STLOUIS_GAME_VALUES : MAYR_GAME_VALUES;
+  const gameMult   = _gameKontraMultiplier(kontraItems);
+  const declarerPts = cardPoints[declarer] ?? 0;
+  const isValat    = valatWinner !== null;
+  const contractDisplay = contract === 'SoloValat' ? 'Solo Valat' : contract;
+
+  // Game score: amount per defender, signed by outcome
+  let gameScore = 0;
+  let gameLabel = '';
+
+  if (isValat && scoring === 'StLouis') {
+    const base = gameValues[contract];
+    gameScore = (valatWinner === declarer ? 1 : -1) * base * 4 * gameMult;
+    gameLabel = valatWinner === declarer ? 'Slam ✓' : 'Slam ✗';
+  } else if (isValat && scoring === 'Mayr') {
+    gameScore = (valatWinner === declarer ? 1 : -1) * 24 * gameMult;
+    gameLabel = valatWinner === declarer ? 'Valat ✓' : 'Valat ✗';
+  } else if (contract === 'SoloValat') {
+    const won = valatWinner === declarer;
+    gameScore = (won ? 1 : -1) * gameValues[contract] * gameMult;
+    gameLabel = won ? 'Solo Valat ✓' : 'Solo Valat ✗';
+  } else {
+    const won = declarerPts >= DECLARER_WINS_AT;
+    gameScore = (won ? 1 : -1) * gameValues[contract] * gameMult;
+    const ptsNote = pi === declarer ? ` (${declarerPts} pts)` : ` (${declarerPts} pts dec.)`;
+    gameLabel = `${contractDisplay} ${won ? '✓' : '✗'}${ptsNote}`;
+  }
+
+  if (gameMult > 1) gameLabel += ` ×${gameMult}`;
+
+  const gameDelta = pi === declarer
+    ? gameScore * defenders.length
+    : -gameScore;
+  items.push({ label: gameLabel, delta: gameDelta });
+
+  // Bonuses (skipped entirely when Valat replaces everything)
+  if (!isValat) {
+    const addBonus = (winner: number | null, name: string, baseVal: number) => {
+      const ann      = announcements.find(a => a.name === name) ?? null;
+      const announced = ann !== null;
+      if (winner === null && !announced) return;
+
+      const kontra   = _bonusKontraMultiplier(kontraItems, name);
+      const soloMult = isSolo ? 2 : 1;
+      const annMult  = announced ? 2 : 1;
+      const value    = baseVal * soloMult * annMult * kontra;
+
+      const effectiveWinner = winner !== null
+        ? winner
+        : ann!.player === declarer ? defenders[0]! : declarer;
+      const sign = effectiveWinner === declarer ? 1 : -1;
+
+      const deltaPi = pi === declarer
+        ? sign * value * defenders.length
+        : -(sign * value);
+
+      if (deltaPi === 0) return;
+
+      let label = name;
+      label += winner !== null ? ' ✓' : ' ✗';
+      const mods: string[] = [];
+      if (announced) mods.push('ann.');
+      if (soloMult > 1) mods.push('solo ×2');
+      if (kontra > 1) mods.push(`kontra ×${kontra}`);
+      if (mods.length > 0) label += ` (${mods.join(', ')})`;
+
+      items.push({ label, delta: deltaPi });
+    };
+
+    if (scoring === 'Mayr') {
+      addBonus(summary.pagatUltimoWinner, 'Pagat',    4);
+      addBonus(summary.uhuWinner,         'Uhu',      6);
+      addBonus(summary.kakaduWinner,      'Kakadu',   8);
+      addBonus(summary.mondFangWinner,    'MondFang', 1);
+      addBonus(summary.trullWinner,       'Trull',    1);
+      addBonus(summary.kingsWinner,       'Kings',    1);
+    } else {
+      addBonus(summary.pagatUltimoWinner, 'Pagat',    1);
+      addBonus(summary.uhuWinner,         'Uhu',      2);
+      addBonus(summary.kakaduWinner,      'Kakadu',   3);
+      addBonus(summary.mondFangWinner,    'MondFang', 1);
+    }
+  }
+
+  return items;
 }
 
 export function computeScoreBreakdown(state: State): PlayerScoreBreakdown[] | null {
@@ -1253,7 +1410,8 @@ export function computeScoreBreakdown(state: State): PlayerScoreBreakdown[] | nu
       : pi === state.declarer         ? 'declarer'
       : 'defender';
     const total = deltas[pi] ?? 0;
-    return { player: pi, role, items: [{ label: 'hand total', delta: total }], total };
+    const items = _buildBreakdownItems(summary, pi);
+    return { player: pi, role, items, total };
   });
 }
 
@@ -1421,12 +1579,57 @@ function getReward(state: State, playerIndex: number): number | null {
   // Inactive dealer in 4-player mode
   if (!state.activePlayers.includes(playerIndex)) return 0.5;
 
-  const myPts    = countCardPoints(state.capturedCards[playerIndex] ?? []);
-  const cardBonus = (myPts - 35) / 70 * 0.4;
+  // cardBonus: creates a gradient within a win/loss so bots keep playing purposefully
+  let cardBonus = 0;
+  if (state.contract === 'Trischaken') {
+    // Fewer personal pts = better (zero-pt player wins)
+    const myPts = countCardPoints(state.capturedCards[playerIndex] ?? []);
+    cardBonus = (35 - myPts) / 70 * 0.2;
+  } else if (state.declarer !== null) {
+    // Both teams keyed off the declarer's pts: declarer wants more, defenders want fewer
+    const declarerPts = countCardPoints(state.capturedCards[state.declarer] ?? []);
+    const margin = (declarerPts - 35) / 35;
+    cardBonus = (playerIndex === state.declarer ? margin : -margin) * 0.2;
+  }
 
   const deltas = _computeDeltas(_computeHandSummary(state), state);
   const raw    = (deltas[playerIndex] ?? 0) + cardBonus;
   return (Math.tanh(raw / REWARD_SCALE) + 1) / 2;
+}
+
+// ── Rollout policy ─────────────────────────────────────────────────────────────
+//
+// Used by ISMCTS as the simulation policy after tree expansion.
+// Non-play phases fall back to random; during trick play:
+//   - Leading: random (complex strategic decision left to the tree)
+//   - Following: play the weakest legal card that beats the current winner;
+//     if none exists, discard the weakest legal card.
+//
+// This ensures e.g. ★ is always played in rollouts when XXI is led, making
+// MondFang risk accurately priced instead of diluted 1/N across legal tarocks.
+
+export function rolloutPolicy(state: State, legal: Move[]): Move {
+  if (state.phase !== 'playing') return legal[Math.floor(Math.random() * legal.length)]!;
+
+  const plays = legal.filter((m): m is { type: 'PLAY_CARD'; card: Card } => m.type === 'PLAY_CARD');
+  if (plays.length === 0) return legal[Math.floor(Math.random() * legal.length)]!;
+
+  // Leading: random — strategic, leave it to the tree
+  if (state.currentTrick.length === 0) return plays[Math.floor(Math.random() * plays.length)]!;
+
+  const ledSuit    = state.currentTrick[0]!.card.suit;
+  const winnerCard = _currentTrickWinnerCard(state.currentTrick, ledSuit);
+
+  if (winnerCard) {
+    const winning = plays.filter(m => _headsCurrentTrick(m.card, winnerCard, ledSuit));
+    if (winning.length > 0) {
+      // Weakest card that wins — conserve high tarocks for later
+      return winning.reduce((a, b) => _cardRank(a.card) < _cardRank(b.card) ? a : b);
+    }
+  }
+
+  // Can't win: discard weakest card to minimise card-point giveaway
+  return plays.reduce((a, b) => _cardRank(a.card) < _cardRank(b.card) ? a : b);
 }
 
 // ── Exports ────────────────────────────────────────────────────────────────────
@@ -1448,4 +1651,4 @@ export {
 };
 
 // Compile-time verification that this module satisfies the ISMCTS engine contract.
-const _: ISMCTSEngine<State, Move> = { getLegalMoves, applyMove, isHandOver, determinize, getReward };
+const _: ISMCTSEngine<State, Move> = { getLegalMoves, applyMove, isHandOver, determinize, getReward, getCurrentPlayer };

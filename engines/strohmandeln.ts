@@ -1237,4 +1237,4 @@ export {
 };
 
 // Compile-time verification that this module satisfies the ISMCTS engine contract.
-const _: ISMCTSEngine<State, Move> = { getLegalMoves, applyMove, isHandOver, determinize, getReward };
+const _: ISMCTSEngine<State, Move> = { getLegalMoves, applyMove, isHandOver, determinize, getReward, getCurrentPlayer };

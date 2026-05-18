@@ -54,6 +54,8 @@ export type GamePublicState = {
   phase: string;
   lastCompletedTrick: { plays: { playerIndex: number; card: Card }[]; winner: number } | null;
   recentEvents: AnimEvent[];
+  currentBid: string | null;
+  declarer?: number;
 };
 
 export type ContinuationState = {

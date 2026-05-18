@@ -25,6 +25,7 @@ function bestUCB<TMove extends object>(
   node:   Node<TMove>,
   legal:  TMove[],
   keyFn:  (m: TMove) => string,
+  isOwn:  boolean,
 ): Node<TMove> | null {
   let best: Node<TMove> | null = null;
   let bestV = -Infinity;
@@ -32,7 +33,9 @@ function bestUCB<TMove extends object>(
     const c = node.children.get(keyFn(m));
     if (!c) continue;
     if (c.visits === 0) return c;
-    const v = c.totalReward / c.visits + UCB_C * Math.sqrt(Math.log(c.avail) / c.visits);
+    const avg = c.totalReward / c.visits;
+    // Paranoid: when it's an opponent's turn, select the move that minimised our reward
+    const v = (isOwn ? avg : -avg) + UCB_C * Math.sqrt(Math.log(c.avail) / c.visits);
     if (v > bestV) { bestV = v; best = c; }
   }
   return best;
@@ -53,17 +56,16 @@ export interface ChooseMoveOptions<TState, TMove extends object> {
   rolloutPolicy?: ((state: TState, legal: TMove[]) => TMove) | null;
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+// ── Core simulation ───────────────────────────────────────────────────────────
 
-function chooseMove<TState, TMove extends object>(
+function _runISMCTS<TState, TMove extends object>(
   eng:         ISMCTSEngine<TState, TMove>,
   state:       TState,
   playerIndex: number,
-  options:     ChooseMoveOptions<TState, TMove> = {},
-): TMove {
+  options:     ChooseMoveOptions<TState, TMove>,
+): Node<TMove> {
   const {
     iterations    = DEFAULT_ITERATIONS,
-    epsilon       = 0,
     moveKey       = (m: TMove) => JSON.stringify(m),
     rolloutPolicy = null,
   } = options;
@@ -84,7 +86,8 @@ function chooseMove<TState, TMove extends object>(
       }
       const unvisited = legal.filter(m => !node.children.has(moveKey(m)));
       if (unvisited.length > 0) break;
-      const next = bestUCB(node, legal, moveKey);
+      const isOwn = eng.getCurrentPlayer(ws) === playerIndex;
+      const next = bestUCB(node, legal, moveKey, isOwn);
       if (!next) break;
       ({ state: ws } = eng.applyMove(ws, next.move!, true));
       node = next;
@@ -118,8 +121,21 @@ function chooseMove<TState, TMove extends object>(
     for (const n of path) { n.visits++; n.totalReward += reward; }
   }
 
-  // ── Move selection ─────────────────────────────────────────────────────────
+  return root;
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+
+function chooseMove<TState, TMove extends object>(
+  eng:         ISMCTSEngine<TState, TMove>,
+  state:       TState,
+  playerIndex: number,
+  options:     ChooseMoveOptions<TState, TMove> = {},
+): TMove {
+  const { epsilon = 0, moveKey = (m: TMove) => JSON.stringify(m) } = options;
+  const root  = _runISMCTS(eng, state, playerIndex, options);
   const legal = eng.getLegalMoves(state);
+
   if (epsilon > 0 && Math.random() < epsilon) return pick(legal);
 
   let best    = legal[0]!;
@@ -133,4 +149,23 @@ function chooseMove<TState, TMove extends object>(
   return best;
 }
 
-export { chooseMove };
+// Returns avg reward for every move explored by ISMCTS — one run, all moves available.
+function evaluateMoves<TState, TMove extends object>(
+  eng:         ISMCTSEngine<TState, TMove>,
+  state:       TState,
+  playerIndex: number,
+  options:     ChooseMoveOptions<TState, TMove> = {},
+): Map<string, { move: TMove; avgReward: number }> {
+  const { moveKey = (m: TMove) => JSON.stringify(m) } = options;
+  const root   = _runISMCTS(eng, state, playerIndex, options);
+  const result = new Map<string, { move: TMove; avgReward: number }>();
+  for (const [key, child] of root.children) {
+    result.set(key, {
+      move:      child.move!,
+      avgReward: child.visits > 0 ? child.totalReward / child.visits : 0,
+    });
+  }
+  return result;
+}
+
+export { chooseMove, evaluateMoves };
