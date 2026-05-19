@@ -70,6 +70,7 @@ export const authResolving = writable(false);
 // ── Convex client ─────────────────────────────────────────────────────────────
 
 export const convex = new ConvexClient(PUBLIC_CONVEX_URL);
+const _http = new ConvexHttpClient(PUBLIC_CONVEX_URL);
 
 // Wire the token into the Convex client.
 //
@@ -97,7 +98,24 @@ _accessToken.subscribe((token) => {
     return;
   }
 
-  convex.setAuth(async () => token, (serverConfirmed) => {
+  convex.setAuth(async ({ forceRefreshToken }) => {
+    if (forceRefreshToken) {
+      const refreshToken = localStorage.getItem(REFRESH_KEY);
+      if (!refreshToken) return null;
+      try {
+        const result: any = await _http.action("auth:signIn" as any, { refreshToken });
+        if (result?.tokens) {
+          storeTokens(result.tokens);
+          return result.tokens.token;
+        }
+        return null;
+      } catch {
+        storeTokens(null);
+        return null;
+      }
+    }
+    return token;
+  }, (serverConfirmed) => {
     convexAuthenticated.set(serverConfirmed);
     if (!serverConfirmed && get(_accessToken) === token) {
       _accessToken.set(null);
@@ -169,12 +187,8 @@ export async function handleCallback(): Promise<string | null> {
   const verifier = localStorage.getItem(VERIFIER_KEY) ?? undefined;
   localStorage.removeItem(VERIFIER_KEY);
 
-  // Use an HTTP client for this unauthenticated one-shot call.
-  // The WebSocket client (convex) restarts its socket during the initial auth
-  // handshake, which drops any in-flight WebSocket actions.
-  const http = new ConvexHttpClient(PUBLIC_CONVEX_URL);
   try {
-    const result: any = await http.action("auth:signIn" as any, {
+    const result: any = await _http.action("auth:signIn" as any, {
       provider: undefined,
       params: { code },
       verifier,

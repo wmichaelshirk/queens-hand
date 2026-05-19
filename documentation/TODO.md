@@ -116,7 +116,7 @@ Replace the inline username / edit / sign-out row in the header with a dropdown 
       Strohmandeln games now also default to Mayr scoring (backend `GAME_DEFAULT_SETTINGS`
       map seeds `createTable`; all `"Beck"` fallbacks corrected to `"Mayr"`).
 - [ ] Show the rulesset on the lobby tables as well
-- [ ] in the strohmandeln results view, show the card points by which the game was one or lost
+- [x] in the strohmandeln results view, show the card points by which the game was one or lost
 
 
 ### 2.9 Mid-game quit and kick
@@ -305,6 +305,7 @@ hands" without a structural change.
 ### 5.1 Generalize components before adding new games (see Pre-5.x above)
 ### 5.2 Bondtolva
 ### 5.3 Dreier Tarock (54/42)
+- [x] 54-card engine: bidding (with-hold, Solo/SoloValat, Trischaken), talon exchange, discard, declaring phase (announcements + Kontra chain), trick-play (Stichzwang), scoring (Mayr + St. Louis); per-hand score breakdown; full web table UI; ISMCTS bot with rollout policy and move priors
 - [ ] Add 42 card variation
 
 ### 5.4 Konigrufen (simple, Lungau, Upper Austrian)

@@ -10,8 +10,9 @@ export const TAROCK_RANKS = [
 export const BLACK_RANKS = ['K', 'Q', 'Kn', 'J', '10', '9', '8', '7'] as const;
 export const RED_RANKS   = ['K', 'Q', 'Kn', 'J', 'A',  '2', '3', '4'] as const;
 
-export const BLACK_SUITS = ['♣', '♠'] as const;
-export const RED_SUITS   = ['♥', '♦'] as const;
+export const BLACK_SUITS     = ['♣', '♠'] as const;
+export const RED_SUITS       = ['♥', '♦'] as const;
+export const BLACK_SUITS_SET = new Set<string>(BLACK_SUITS);
 
 export const TAROCK_RANK_ORDER: Record<string, number> = Object.fromEntries(
   [...TAROCK_RANKS].reverse().map((r, i) => [r, i])  // Pagat=0, Sküs=21
@@ -85,10 +86,7 @@ export function shuffle<T>(arr: T[]): T[] {
 export function trickStrength(card: Card, ledSuit: string): number {
   if (isTarock(card)) return 1000 + (TAROCK_RANK_ORDER[card.rank] ?? 0);
   if (card.suit !== ledSuit) return -1;
-  const order = (BLACK_SUITS as readonly string[]).includes(card.suit)
-    ? BLACK_RANK_ORDER
-    : RED_RANK_ORDER;
-  return order[card.rank] ?? 0;
+  return (BLACK_SUITS_SET.has(card.suit) ? BLACK_RANK_ORDER : RED_RANK_ORDER)[card.rank] ?? 0;
 }
 
 export function trickWinner(trick: TarockPlay[], ledSuit: string): number {
@@ -99,6 +97,61 @@ export function trickWinner(trick: TarockPlay[], ledSuit: string): number {
     }
   }
   return trick[best]!.playerIndex;
+}
+
+// ── Rollout-policy helpers (shared by engine rolloutPolicy functions) ──────────
+
+/** Numeric strength of a card for rollout ordering (higher = stronger). */
+export function cardRank(c: Card): number {
+  if (isTarock(c)) return TAROCK_RANK_ORDER[c.rank] ?? 0;
+  return (BLACK_SUITS_SET.has(c.suit) ? BLACK_RANK_ORDER : RED_RANK_ORDER)[c.rank] ?? 0;
+}
+
+/** The card currently winning the in-progress trick, or null if the trick is empty. */
+export function currentTrickWinnerCard(trick: TarockPlay[], ledSuit: string): Card | null {
+  if (trick.length === 0) return null;
+  const tarocks = trick.filter(p => isTarock(p.card));
+  if (tarocks.length > 0) {
+    return tarocks.reduce((best, p) =>
+      (TAROCK_RANK_ORDER[p.card.rank] ?? 0) > (TAROCK_RANK_ORDER[best.card.rank] ?? 0) ? p : best
+    ).card;
+  }
+  const ledCards = trick.filter(p => p.card.suit === ledSuit);
+  if (ledCards.length === 0) return null;
+  const rankOrder = BLACK_SUITS_SET.has(ledSuit) ? BLACK_RANK_ORDER : RED_RANK_ORDER;
+  return ledCards.reduce((best, p) =>
+    (rankOrder[p.card.rank] ?? 0) > (rankOrder[best.card.rank] ?? 0) ? p : best
+  ).card;
+}
+
+/** True if `card` would beat `winningCard` given the led suit. */
+export function headsCurrentTrick(card: Card, winningCard: Card, ledSuit: string): boolean {
+  if (isTarock(winningCard)) {
+    return isTarock(card) && (TAROCK_RANK_ORDER[card.rank] ?? 0) > (TAROCK_RANK_ORDER[winningCard.rank] ?? 0);
+  }
+  if (isTarock(card)) return true;
+  if (card.suit !== ledSuit) return false;
+  const rankOrder = BLACK_SUITS_SET.has(ledSuit) ? BLACK_RANK_ORDER : RED_RANK_ORDER;
+  return (rankOrder[card.rank] ?? 0) > (rankOrder[winningCard.rank] ?? 0);
+}
+
+/** Pick the weakest move by card rank (lowest rank = smallest card-point risk). */
+export function weakestMove<M extends { card: Card }>(moves: M[]): M {
+  return moves.reduce((a, b) => cardRank(a.card) < cardRank(b.card) ? a : b);
+}
+
+/** Rollout follow policy: weakest winning card, or weakest overall if unable to win. */
+export function followTrickPolicy<M extends { card: Card }>(
+  plays: M[],
+  trick:  TarockPlay[],
+): M {
+  const ledSuit    = trick[0]!.card.suit;
+  const winnerCard = currentTrickWinnerCard(trick, ledSuit);
+  if (winnerCard) {
+    const winning = plays.filter(m => headsCurrentTrick(m.card, winnerCard, ledSuit));
+    if (winning.length > 0) return weakestMove(winning);
+  }
+  return weakestMove(plays);
 }
 
 // ── Bird bonus utilities ───────────────────────────────────────────────────────

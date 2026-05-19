@@ -269,20 +269,16 @@ async function playStrohmandelnHand(
   initialState: straw.State,
   names: string[],
 ): Promise<straw.State> {
-  // ── Initial strawman uncovering (before bidding) ──
-  const { state: uncoveredState, events: uncoverEvents } = straw.uncoverStrawmenInitial(initialState);
-  let state = uncoveredState;
-  console.log('\n  ── Strawman uncovering ──');
-  printPileEvents(uncoverEvents, names);
-
   // ── Bidding ──
+  let state = initialState;
   while (state.phase === 'bidding') {
     const pi = straw.getCurrentPlayer(state);
     const isForehand = pi !== state.dealerIndex;
+    let bidEvents: BareEvent[] = [];
 
     if (pi === 0) {
       const bid = await askStrawBid(state, names, isForehand);
-      ({ state } = straw.applyMove(state, bid === 'play'
+      ({ state, events: bidEvents } = straw.applyMove(state, bid === 'play'
         ? { type: 'MAKE_BID', bid: 'play' }
         : { type: 'PASS_BID' }));
     } else {
@@ -290,8 +286,10 @@ async function playStrohmandelnHand(
       const role  = isForehand ? 'forehand' : 'dealer';
       const label = move.type === 'MAKE_BID' ? `${A.bold}Play${A.reset}` : `${A.dim}Pass${A.reset}`;
       console.log(`\n  ${names[pi]} (${role}) bids: ${label}`);
-      ({ state } = straw.applyMove(state, move));
+      ({ state, events: bidEvents } = straw.applyMove(state, move));
     }
+    // Print pile reveal events emitted when bidding ends (last bid only)
+    printPileEvents(bidEvents, names);
   }
 
   if (state.declarer === null) {

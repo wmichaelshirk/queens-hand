@@ -17,7 +17,7 @@ function playHand(
   iters: [number, number],
 ): straw.State {
   const initial = straw.dealState({ scores, dealerIndex, scoring: 'Beck', handMultiplier });
-  let state = straw.uncoverStrawmenInitial(initial).state;
+  let state = initial;
 
   while (!straw.isHandOver(state)) {
     const pi   = straw.getCurrentPlayer(state);

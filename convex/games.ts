@@ -180,8 +180,7 @@ const strahAdapter: EngineAdapter = {
       scoring: (settings.scoring as Strohmandeln.ScoringSystemName | undefined) ?? "Mayr",
     });
     const dealEvts = Strohmandeln.getDealEvents(firstPlayer);
-    const { state, events } = Strohmandeln.uncoverStrawmenInitial(rawState);
-    return { state, events: [...dealEvts, ...events] };
+    return { state: rawState, events: dealEvts };
   },
   getLegalMoves(state) {
     return Strohmandeln.getLegalMoves(state) as Move[];
@@ -203,12 +202,12 @@ const strahAdapter: EngineAdapter = {
       handMultiplier: state.nextHandMultiplier,
     });
     const dealEvts = Strohmandeln.getDealEvents(newDealerIndex);
-    const { state: newState, events } = Strohmandeln.uncoverStrawmenInitial(rawState);
-    return { state: newState, events: [...dealEvts, ...events] };
+    return { state: rawState, events: dealEvts };
   },
   chooseBotMove(state, playerIndex) {
     return chooseMove(Strohmandeln, state as Strohmandeln.State, playerIndex, {
       iterations: 200,
+      rolloutPolicy: Strohmandeln.rolloutPolicy,
     }) as Move;
   },
   getHands(state) { return state.hands as Card[][]; },
@@ -262,7 +261,7 @@ const dreitAdapter: EngineAdapter = {
     const s = state as Dreiertarock.State;
 
     if (s.phase === 'bidding') {
-      const rewards = evaluateMoves(Dreiertarock, s, playerIndex, { iterations: 800, rolloutPolicy: Dreiertarock.rolloutPolicy });
+      const rewards = evaluateMoves(Dreiertarock, s, playerIndex, { iterations: 800, rolloutPolicy: Dreiertarock.rolloutPolicy, movePrior: Dreiertarock.movePrior });
 
       // Base option: PASS_BID if legal (non-forehand); otherwise MAKE_BID('Single') for forehand
       const passKey   = JSON.stringify({ type: 'PASS_BID' });
@@ -350,7 +349,7 @@ const dreitAdapter: EngineAdapter = {
     const iterations = s.phase === 'exchange' ? 1500
                      : s.phase === 'discard'  ? 1000
                      : 400;
-    return chooseMove(Dreiertarock, s, playerIndex, { iterations, rolloutPolicy: Dreiertarock.rolloutPolicy }) as Move;
+    return chooseMove(Dreiertarock, s, playerIndex, { iterations, rolloutPolicy: Dreiertarock.rolloutPolicy, movePrior: Dreiertarock.movePrior }) as Move;
   },
   getHands(state) { return state.hands as Card[][]; },
   getCurrentBid(state) { return (state as Dreiertarock.State).currentBid ?? null; },
@@ -820,11 +819,12 @@ export const getMyGameState = query({
     let strawmen: Array<Array<{ topCard: Card | null; depth: number }>> | null = null;
     if (game.gameType === "strohmandeln" && liveState) {
       const rawStrawmen: any[][] = liveState.state.strawmen ?? [];
+      const isBidding = liveState.state.phase === 'bidding';
       strawmen = rawStrawmen.map((playerPiles: any[]) =>
         playerPiles.map((pile: { cards: any[] }) => {
           const cards = pile.cards ?? [];
-          const topCard = cards.length > 0 ? (cards[cards.length - 1] as Card) : null;
-          const depth = Math.max(0, cards.length - 1);
+          const topCard = !isBidding && cards.length > 0 ? (cards[cards.length - 1] as Card) : null;
+          const depth = topCard !== null ? Math.max(0, cards.length - 1) : cards.length;
           return { topCard, depth };
         })
       );
@@ -1636,13 +1636,13 @@ async function _startNextHand(
     });
     dealEvents = Dreiertarock.getDealEvents(cd.nextDealerIndex, (cd.playerCount ?? 3) as 3 | 4);
   } else {
-    const rawState = Strohmandeln.dealState({
+    newState = Strohmandeln.dealState({
       scores: cd.scores,
       dealerIndex: cd.nextDealerIndex,
       scoring: (cd.scoring ?? "Mayr") as Strohmandeln.ScoringSystemName,
       handMultiplier: cd.nextHandMultiplier ?? 1,
     });
-    ({ state: newState, events: dealEvents } = Strohmandeln.uncoverStrawmenInitial(rawState));
+    dealEvents = Strohmandeln.getDealEvents(cd.nextDealerIndex);
   }
 
   await ctx.db.insert("game_live_state", { gameId, state: newState });

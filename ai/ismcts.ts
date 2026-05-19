@@ -47,6 +47,17 @@ function pick<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)]!;
 }
 
+function weightedPick<T>(items: T[], weights: number[]): T {
+  let total = 0;
+  for (let i = 0; i < weights.length; i++) total += weights[i]!;
+  let r = Math.random() * total;
+  for (let i = 0; i < items.length; i++) {
+    r -= weights[i]!;
+    if (r <= 0) return items[i]!;
+  }
+  return items[items.length - 1]!;
+}
+
 // ── Options ───────────────────────────────────────────────────────────────────
 
 export interface ChooseMoveOptions<TState, TMove extends object> {
@@ -54,6 +65,8 @@ export interface ChooseMoveOptions<TState, TMove extends object> {
   epsilon?:       number;
   moveKey?:       (move: TMove) => string;
   rolloutPolicy?: ((state: TState, legal: TMove[]) => TMove) | null;
+  /** Parallel weights for legal moves; biases which unvisited node is expanded first. Return null to use uniform weights. */
+  movePrior?:     ((state: TState, legal: TMove[]) => number[] | null) | null;
 }
 
 // ── Core simulation ───────────────────────────────────────────────────────────
@@ -68,6 +81,7 @@ function _runISMCTS<TState, TMove extends object>(
     iterations    = DEFAULT_ITERATIONS,
     moveKey       = (m: TMove) => JSON.stringify(m),
     rolloutPolicy = null,
+    movePrior     = null,
   } = options;
 
   const root = makeNode<TMove>();
@@ -96,10 +110,22 @@ function _runISMCTS<TState, TMove extends object>(
 
     // ── Expansion ──────────────────────────────────────────────────────────
     if (!eng.isHandOver(ws)) {
-      const legal     = eng.getLegalMoves(ws);
-      const unvisited = legal.filter(m => !node.children.has(moveKey(m)));
-      if (unvisited.length > 0) {
-        const m     = pick(unvisited);
+      const legal = eng.getLegalMoves(ws);
+      let m: TMove | undefined;
+      const weights = movePrior ? movePrior(ws, legal) : null;
+      if (weights) {
+        const mvs: TMove[] = [], wts: number[] = [];
+        for (let i = 0; i < legal.length; i++) {
+          if (!node.children.has(moveKey(legal[i]!))) {
+            mvs.push(legal[i]!); wts.push(weights[i] ?? 1);
+          }
+        }
+        if (mvs.length > 0) m = weightedPick(mvs, wts);
+      } else {
+        const unvisited = legal.filter(mv => !node.children.has(moveKey(mv)));
+        if (unvisited.length > 0) m = pick(unvisited);
+      }
+      if (m !== undefined) {
         const child = makeNode(m);
         node.children.set(moveKey(m), child);
         ({ state: ws } = eng.applyMove(ws, m, true));

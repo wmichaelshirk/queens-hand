@@ -100,7 +100,7 @@
  *
  *   St. Louis:
  *     Game values as listed above.
- *     Bonuses: Pagat ±1, Uhu ±2, Kakadu ±3, Mond Fang ±1.
+ *     Bonuses: Pagat ±1, Uhu ±2, Kakadu ±3, Mond Fang ±1, Trull ±1, Kings ±1.
  *     Valat (also called "Slam"): win all 16 tricks. Multiplies game value by 4.
  *       Replaces all bonuses entirely (no other bonuses score).
  *     Trischaken with Stichzwang: each player must overtake if possible. Winner of the last
@@ -124,7 +124,7 @@
  *
  * "St. Louis" scoring differences:
  *   Bid values: Trischaken/Single=1, Double=2, Triple=3, Solo=4, Solo Valat=32.
- *   Bonuses: Pagat=1, Uhu=2, Kakadu=3, Mond Fang=1 (Trull/Kings not separate bonuses).
+ *   Bonuses: Pagat=1, Uhu=2, Kakadu=3, Mond Fang=1, Trull=1, Kings=1.
  *   Valat / Slam (all tricks): ×4 game value; all bonuses replaced entirely.
  *   Trischaken adds Stichzwang (must overtake if able); last-trick winner takes talon.
  *
@@ -138,9 +138,11 @@ import type { ISMCTSEngine } from '../lib/engine';
 import { bipartiteMatch } from '../lib/matching';
 import {
   TAROCK_RANKS, TAROCK_RANK_ORDER, BLACK_RANK_ORDER, RED_RANK_ORDER,
-  BLACK_RANKS, RED_RANKS, BLACK_SUITS, RED_SUITS,
+  BLACK_RANKS, RED_RANKS, BLACK_SUITS, RED_SUITS, BLACK_SUITS_SET,
   cardPointValue, countCardPoints, isTarock, cardEquals, createDeck, shuffle,
   trickWinner, birdWinnerAtPos, inferVoids,
+  cardRank, currentTrickWinnerCard, headsCurrentTrick,
+  weakestMove, followTrickPolicy,
 } from '../lib/tarock';
 import type { TarockPlay, TarockTrickRecord } from '../lib/tarock';
 
@@ -499,45 +501,40 @@ function _legalDeclaringMoves(state: State): Move[] {
   const pi       = state.declaringBidder;
   const moves: Move[] = [{ type: 'PASS_ANNOUNCEMENT' }];
 
-  // Announcements (only non-Trischaken)
-  if (state.contract !== 'Trischaken') {
-    const hand    = state.hands[pi] ?? [];
-    const already = new Set(state.announcements.map(a => a.name));
-
-    if (!already.has('Pagat')  && hand.some(c => isTarock(c) && c.rank === 'I'))   moves.push({ type: 'MAKE_ANNOUNCEMENT', announcement: 'Pagat' });
-    if (!already.has('Uhu')    && hand.some(c => isTarock(c) && c.rank === 'II'))  moves.push({ type: 'MAKE_ANNOUNCEMENT', announcement: 'Uhu' });
-    if (!already.has('Kakadu') && hand.some(c => isTarock(c) && c.rank === 'III')) moves.push({ type: 'MAKE_ANNOUNCEMENT', announcement: 'Kakadu' });
-    if (!already.has('Trull')  && hand.some(c => isTarock(c) && c.rank === '★'))   moves.push({ type: 'MAKE_ANNOUNCEMENT', announcement: 'Trull' });
-    if (!already.has('Kings'))                                                     moves.push({ type: 'MAKE_ANNOUNCEMENT', announcement: 'Kings' });
+  // Trischaken: no announcements; each player may Kontra the game exactly once
+  if (state.contract === 'Trischaken') {
+    const gameItem = state.kontraItems.find(k => k.target === 'game');
+    if (gameItem) {
+      const alreadyKontrad = [gameItem.kontraBy, gameItem.rekontraBy, gameItem.subkontraBy].includes(pi);
+      if (!alreadyKontrad) moves.push({ type: 'KONTRA', target: 'game', level: 'Kontra' });
+    }
+    return moves;
   }
 
-  // Kontra moves
+  // Announcements (non-Trischaken only)
+  const hand    = state.hands[pi] ?? [];
+  const already = new Set(state.announcements.map(a => a.name));
+
+  if (!already.has('Pagat')  && hand.some(c => isTarock(c) && c.rank === 'I'))   moves.push({ type: 'MAKE_ANNOUNCEMENT', announcement: 'Pagat' });
+  if (!already.has('Uhu')    && hand.some(c => isTarock(c) && c.rank === 'II'))  moves.push({ type: 'MAKE_ANNOUNCEMENT', announcement: 'Uhu' });
+  if (!already.has('Kakadu') && hand.some(c => isTarock(c) && c.rank === 'III')) moves.push({ type: 'MAKE_ANNOUNCEMENT', announcement: 'Kakadu' });
+  if (!already.has('Trull')  && hand.some(c => isTarock(c) && c.rank === '★'))   moves.push({ type: 'MAKE_ANNOUNCEMENT', announcement: 'Trull' });
+  if (!already.has('Kings'))                                                     moves.push({ type: 'MAKE_ANNOUNCEMENT', announcement: 'Kings' });
+
+  // Kontra chain (non-Trischaken only)
   for (const item of state.kontraItems) {
-    const nextLevel = item.multiplier === 1 ? 2 : item.multiplier === 2 ? 4 : item.multiplier === 4 ? 8 : null;
-    if (nextLevel === null) continue;
+    if (item.multiplier >= 8) continue;
 
-    const levelName = _kontraLevelName(item);
-
-    // Determine who "owns" this target (declarer owns 'game' and their own announcements)
-    const ownerTeam = _ownerTeam(item.target, state);
+    const levelName  = _kontraLevelName(item);
+    const ownerTeam  = _ownerTeam(item.target, state);
     const isOpponent = !ownerTeam.includes(pi);
 
     if (item.multiplier === 1 && isOpponent) {
       moves.push({ type: 'KONTRA', target: item.target, level: levelName });
-    } else if (item.multiplier === 2 && ownerTeam.includes(pi)) {
+    } else if (item.multiplier === 2 && !isOpponent) {
       moves.push({ type: 'KONTRA', target: item.target, level: levelName });
     } else if (item.multiplier === 4 && isOpponent) {
       moves.push({ type: 'KONTRA', target: item.target, level: levelName });
-    }
-
-    // Trischaken: each player can Kontra the game independently
-    if (state.contract === 'Trischaken' && item.target === 'game') {
-      const alreadyKontra = [item.kontraBy, item.rekontraBy, item.subkontraBy].includes(pi);
-      if (!alreadyKontra && item.multiplier < 8) {
-        if (!moves.some(m => m.type === 'KONTRA' && (m as {target:string}).target === 'game')) {
-          moves.push({ type: 'KONTRA', target: 'game', level: levelName });
-        }
-      }
     }
   }
 
@@ -560,39 +557,6 @@ function _ownerTeam(target: string, state: State): number[] {
 }
 
 // ── Card play ─────────────────────────────────────────────────────────────────
-
-function _cardRank(c: Card): number {
-  if (isTarock(c)) return TAROCK_RANK_ORDER[c.rank] ?? 0;
-  const order = (BLACK_SUITS as readonly string[]).includes(c.suit) ? BLACK_RANK_ORDER : RED_RANK_ORDER;
-  return order[c.rank] ?? 0;
-}
-
-function _currentTrickWinnerCard(trick: TarockPlay[], ledSuit: string): Card | null {
-  if (trick.length === 0) return null;
-  const tarocks = trick.filter(p => isTarock(p.card));
-  if (tarocks.length > 0) {
-    return tarocks.reduce((best, p) =>
-      (TAROCK_RANK_ORDER[p.card.rank] ?? 0) > (TAROCK_RANK_ORDER[best.card.rank] ?? 0) ? p : best
-    ).card;
-  }
-  const ledCards = trick.filter(p => p.card.suit === ledSuit);
-  if (ledCards.length === 0) return null;
-  const rankOrder = (BLACK_SUITS as readonly string[]).includes(ledSuit) ? BLACK_RANK_ORDER : RED_RANK_ORDER;
-  return ledCards.reduce((best, p) =>
-    (rankOrder[p.card.rank] ?? 0) > (rankOrder[best.card.rank] ?? 0) ? p : best
-  ).card;
-}
-
-function _headsCurrentTrick(card: Card, winningCard: Card, ledSuit: string): boolean {
-  const winnerIsTarock = isTarock(winningCard);
-  if (winnerIsTarock) {
-    return isTarock(card) && (TAROCK_RANK_ORDER[card.rank] ?? 0) > (TAROCK_RANK_ORDER[winningCard.rank] ?? 0);
-  }
-  if (isTarock(card)) return true;
-  if (card.suit !== ledSuit) return false;
-  const rankOrder = (BLACK_SUITS as readonly string[]).includes(ledSuit) ? BLACK_RANK_ORDER : RED_RANK_ORDER;
-  return (rankOrder[card.rank] ?? 0) > (rankOrder[winningCard.rank] ?? 0);
-}
 
 function _legalCardPlays(state: State): Card[] {
   if (state.phase !== 'playing') return [];
@@ -619,9 +583,9 @@ function _legalCardPlays(state: State): Card[] {
 
   // Stichzwang (St. Louis Trischaken only): must overtake the current winning card if able
   if (state.contract === 'Trischaken' && state.scoring === 'StLouis') {
-    const winningCard = _currentTrickWinnerCard(state.currentTrick, ledSuit);
+    const winningCard = currentTrickWinnerCard(state.currentTrick, ledSuit);
     if (winningCard) {
-      const heading = candidates.filter(c => _headsCurrentTrick(c, winningCard, ledSuit));
+      const heading = candidates.filter(c => headsCurrentTrick(c, winningCard, ledSuit));
       if (heading.length > 0) return heading;
     }
   }
@@ -677,10 +641,11 @@ function _applyBid(state: State, move: Move, simulate: boolean): EngineResult<St
   const prevBid    = s.currentBid;
 
   if (prevBid !== null && BID_RANK[level] === BID_RANK[prevBid] && s.isInPair) {
-    // Hold: bidder takes the current bid at the same level
+    // Hold: bidder takes the current bid at the same level.
+    // isInPair=false: the original outbidder is now free to raise or pass.
     s.currentHolder = pi;
     s.bidder        = prevHolder!;
-    s.isInPair      = true;
+    s.isInPair      = false;
     // biddingContested stays true
   } else {
     // Raise (or initial bid)
@@ -1083,16 +1048,22 @@ function _computeHandSummary(s: State): HandSummary {
 
   let mondFangWinner: number | null = null;
   for (const { plays, winner } of trickLog) {
-    const hasSküs = plays.some(p => p.card.suit === 'T' && p.card.rank === '★');
-    const hasMond  = plays.some(p => p.card.suit === 'T' && p.card.rank === 'XXI');
-    if (hasSküs && hasMond) { mondFangWinner = winner; break; }
+    const hasSküs  = plays.some(p => p.card.suit === 'T' && p.card.rank === '★');
+    const mondPlay = plays.find(p => p.card.suit === 'T' && p.card.rank === 'XXI');
+    if (hasSküs && mondPlay) {
+      // Only scores when the capture crosses team lines (declarer vs defenders).
+      // One defender capturing another defender's Mond earns no bonus.
+      const crossTeam = declarer !== null && (winner === declarer) !== (mondPlay.playerIndex === declarer);
+      if (crossTeam) mondFangWinner = winner;
+      break;
+    }
   }
 
   // Trull winner: whoever captured all 3 Trull cards (Sküs ★, Mond XXI, Pagat I)
   let trullWinner: number | null = null;
   for (const pi of activePlayers) {
     const cap = capturedCards[pi] ?? [];
-    if (['★', 'XXI', 'I'].every(r => cap.some(c => isTarock(c) && c.rank === r))) {
+    if ([...TRULL_RANKS].every(r => cap.some(c => isTarock(c) && c.rank === r))) {
       trullWinner = pi; break;
     }
   }
@@ -1246,11 +1217,12 @@ function _scoreDeclaredGame(summary: HandSummary, deltas: Record<number, number>
       _applyBonus(summary.trullWinner,       'Trull',    1);
       _applyBonus(summary.kingsWinner,       'Kings',    1);
     } else {
-      // StLouis — Trull and Kings do not score
       _applyBonus(summary.pagatUltimoWinner, 'Pagat',    1);
       _applyBonus(summary.uhuWinner,         'Uhu',      2);
       _applyBonus(summary.kakaduWinner,      'Kakadu',   3);
       _applyBonus(summary.mondFangWinner,    'MondFang', 1);
+      _applyBonus(summary.trullWinner,       'Trull',    1);
+      _applyBonus(summary.kingsWinner,       'Kings',    1);
     }
   }
 }
@@ -1393,6 +1365,8 @@ function _buildBreakdownItems(summary: HandSummary, pi: number): Array<{ label: 
       addBonus(summary.uhuWinner,         'Uhu',      2);
       addBonus(summary.kakaduWinner,      'Kakadu',   3);
       addBonus(summary.mondFangWinner,    'MondFang', 1);
+      addBonus(summary.trullWinner,       'Trull',    1);
+      addBonus(summary.kingsWinner,       'Kings',    1);
     }
   }
 
@@ -1434,8 +1408,7 @@ function _inferStichzwangAbsences(
   };
 
   for (const { plays, ledSuit } of trickLog) {
-    const ledOrder = (BLACK_SUITS as readonly string[]).includes(ledSuit)
-      ? BLACK_RANK_ORDER : RED_RANK_ORDER;
+    const ledOrder = BLACK_SUITS_SET.has(ledSuit) ? BLACK_RANK_ORDER : RED_RANK_ORDER;
     let highestTarockOrder = -1;
     let highestLedOrder    = -1;
 
@@ -1597,11 +1570,164 @@ function getReward(state: State, playerIndex: number): number | null {
   return (Math.tanh(raw / REWARD_SCALE) + 1) / 2;
 }
 
+// ── Bid prior ──────────────────────────────────────────────────────────────────
+//
+// Weights legal moves during ISMCTS expansion so iterations are spent on
+// plausible bids first. Hand strength uses the Mayr & Sedlaczek (2016) feature-
+// valuation heuristic — expected card-point yield from structural features:
+//
+//   Void suit (Fehlfarbe):       +11  entire suit ruffable
+//   Singleton King:              +10  1 guaranteed trick + suit stripped by Tarocks
+//   King + Queen (any length):    +8  protected King, likely 1 safe trick
+//   Sküs (★) or Mond (XXI):      +9  each; guaranteed high-trump winners
+//   Long King (≥4 cards, no Q):  +5  freeable with Tarock length
+//   Queen + Knight (no King):    +3  semi-protected, modest contribution
+//
+// Exchange contracts (Single–Quintuple) add TALON_EXPECTED_PTS (declarer picks
+// the better half). Solo subtracts a 5-pt risk margin (opponents keep the talon).
+
+const TALON_EXPECTED_PTS = 4.5;
+const EVAL_SUITS = [...BLACK_SUITS, ...RED_SUITS] as const;
+
+// Minimum Tarock count below which a bid level is implausible regardless of suit strength.
+// Single needs ~10 for control; SoloValat needs near-complete Tarock dominance.
+const MIN_TAROCKS: Record<BidLevel, number> = {
+  Single: 8, Double: 9, Triple: 9, Quadruple: 10, Quintuple: 10, Solo: 10, SoloValat: 12,
+};
+
+// Expected card-point thresholds. Exchange-contract evaluation includes TALON_EXPECTED_PTS;
+// Solo evaluation includes a -5 risk margin — both already baked into _evaluateHand.
+const BID_LEVEL_THRESHOLDS: Record<BidLevel, number> = {
+  Single:    34,  // min 36 to win; talon adds ~4.5; threshold allows borderline hands
+  Double:    37,  // previous holder claimed strength; need margin above 36
+  Triple:    40,
+  Quadruple: 43,
+  Quintuple: 46,
+  Solo:      38,  // text examples: solid Solo ≈ 44 expected pts; risky ≈ 39; -5 already applied
+  SoloValat: 50,  // must win all 16 tricks
+};
+
+// Returns expected card-point yield from structural hand features (talon adjustment excluded).
+// Accepts pre-computed tarocks slice (hand.filter(isTarock)) to avoid redundant passes.
+function _evaluateHand(hand: Card[], tarocks: Card[]): number {
+  let strength = 0;
+
+  const tarockCount = tarocks.length;
+
+  if (tarocks.some(c => c.rank === '★'))   strength += 9;   // Sküs — guaranteed winner
+  if (tarocks.some(c => c.rank === 'XXI')) strength += 9;   // Mond — strong winner
+
+  for (const suit of EVAL_SUITS) {
+    const cards = hand.filter(c => c.suit === suit);
+    const n     = cards.length;
+    const hasK  = cards.some(c => c.rank === 'K');
+    const hasQ  = cards.some(c => c.rank === 'Q');
+    const hasKn = cards.some(c => c.rank === 'Kn');
+
+    if (n === 0) {
+      strength += 11;                    // Fehlfarbe — can ruff entire suit
+    } else if (hasK && n === 1) {
+      strength += 10;                    // blanker König — singleton, 1 guaranteed trick
+    } else if (hasK && hasQ) {
+      strength += 8;                     // König mit Dame — protected regardless of length
+    } else if (hasK && n >= 4) {
+      strength += 5;                     // König zu siebt — long King, freeable
+    } else if (!hasK && hasQ && hasKn) {
+      strength += 3;                     // Dame mit Cavall — semi-protected
+    }
+  }
+
+  // Tarock length: each below 10 is a control liability; each above adds trick-taking power
+  strength += (tarockCount - 10) * 0.8;
+
+  return strength;
+}
+
+function scoreTalonGroup(group: Card[], hand: Card[], scoring: ScoringSystemName): number {
+  let score = 0;
+  const isMayr = scoring !== 'StLouis';
+
+  for (const card of group) {
+    if (card.rank === 'K') {
+      score += 1;
+    } else if (isTarock(card)) {
+      const order = TAROCK_RANK_ORDER[card.rank] ?? 0;
+      if (card.rank === '★')        score += 2;
+      else if (card.rank === 'XXI') score += 2;
+      else if (order >= 15)         score += 1.3;  // XVI–XX
+      else                          score += 1;
+    }
+  }
+
+  const birds = [
+    { rank: 'I',   newBonus: isMayr ? 2   : 1,   supportBonus: 0.3  },
+    { rank: 'II',  newBonus: isMayr ? 3   : 1.5, supportBonus: 0.25 },
+    { rank: 'III', newBonus: isMayr ? 4   : 2,   supportBonus: 0.2  },
+  ];
+  const groupTarockCount = group.filter(isTarock).length;
+
+  for (const bird of birds) {
+    const inGroup = group.some(c => isTarock(c) && c.rank === bird.rank);
+    const inHand  = hand.some(c => isTarock(c) && c.rank === bird.rank);
+    if (inGroup && !inHand) {
+      const support = group.filter(c => isTarock(c) && c.rank !== bird.rank).length;
+      if (support >= 2)      score += bird.newBonus;
+      else if (support >= 1) score += bird.newBonus * 0.5;
+    } else if (inHand && !inGroup) {
+      score += groupTarockCount * bird.supportBonus;
+    }
+  }
+
+  return score;
+}
+
+export function movePrior(state: State, legal: Move[]): number[] | null {
+  if (state.phase === 'exchange') {
+    const declarer = state.declarer!;
+    const hand     = state.hands[declarer] ?? [];
+    const scores   = state.talonGroups.map(g => scoreTalonGroup(g, hand, state.scoring));
+    return legal.map(m => m.type === 'CHOOSE_TALON'
+      ? (m.choice === 'first' ? scores[0]! : scores[1]!)
+      : 1
+    );
+  }
+
+  if (state.phase !== 'bidding') return null;
+
+  const player      = getCurrentPlayer(state);
+  const hand        = state.hands[player] ?? [];
+  const tarocks     = hand.filter(isTarock);
+  const tarockCount = tarocks.length;
+  const baseStr     = _evaluateHand(hand, tarocks);
+  const exchangeStr = baseStr + TALON_EXPECTED_PTS;
+  const soloStr     = baseStr - 5;
+
+  return legal.map(m => {
+    if (m.type === 'PASS_BID') {
+      // Sigmoid inverse of Single bid — high weight on weak hands, fades on strong hands
+      const margin = exchangeStr - BID_LEVEL_THRESHOLDS.Single;
+      return Math.max(0.05, 1 / (1 + Math.exp(margin * 0.5)));
+    }
+    if (m.type !== 'MAKE_BID') return 1;
+
+    const level     = m.bid as BidLevel;
+    const forSolo   = level === 'Solo' || level === 'SoloValat';
+    const strength  = forSolo ? soloStr : exchangeStr;
+    const threshold = BID_LEVEL_THRESHOLDS[level];
+
+    if (tarockCount < MIN_TAROCKS[level]) return 0.05;
+
+    const margin = strength - threshold;
+    return Math.max(0.05, 1 / (1 + Math.exp(-margin * 0.5)));
+  });
+}
+
 // ── Rollout policy ─────────────────────────────────────────────────────────────
 //
 // Used by ISMCTS as the simulation policy after tree expansion.
 // Non-play phases fall back to random; during trick play:
-//   - Leading: random (complex strategic decision left to the tree)
+//   - Leading: prefer cashing guaranteed winners (Sküs, then suit-void Kings),
+//     otherwise discard the weakest card.
 //   - Following: play the weakest legal card that beats the current winner;
 //     if none exists, discard the weakest legal card.
 //
@@ -1609,27 +1735,38 @@ function getReward(state: State, playerIndex: number): number | null {
 // MondFang risk accurately priced instead of diluted 1/N across legal tarocks.
 
 export function rolloutPolicy(state: State, legal: Move[]): Move {
+  if (state.phase === 'exchange') {
+    const declarer = state.declarer!;
+    const hand     = state.hands[declarer] ?? [];
+    const [s0, s1] = state.talonGroups.map(g => scoreTalonGroup(g, hand, state.scoring));
+    const best = (s0 ?? 0) >= (s1 ?? 0) ? 'first' : 'second';
+    return legal.find(m => m.type === 'CHOOSE_TALON' && (m as { choice: string }).choice === best) ?? legal[0]!;
+  }
+
   if (state.phase !== 'playing') return legal[Math.floor(Math.random() * legal.length)]!;
 
   const plays = legal.filter((m): m is { type: 'PLAY_CARD'; card: Card } => m.type === 'PLAY_CARD');
-  if (plays.length === 0) return legal[Math.floor(Math.random() * legal.length)]!;
 
-  // Leading: random — strategic, leave it to the tree
-  if (state.currentTrick.length === 0) return plays[Math.floor(Math.random() * plays.length)]!;
+  if (state.currentTrick.length === 0) {
+    const hand    = state.hands[getCurrentPlayer(state)] ?? [];
+    const tarocks = hand.filter(isTarock);
 
-  const ledSuit    = state.currentTrick[0]!.card.suit;
-  const winnerCard = _currentTrickWinnerCard(state.currentTrick, ledSuit);
-
-  if (winnerCard) {
-    const winning = plays.filter(m => _headsCurrentTrick(m.card, winnerCard, ledSuit));
-    if (winning.length > 0) {
-      // Weakest card that wins — conserve high tarocks for later
-      return winning.reduce((a, b) => _cardRank(a.card) < _cardRank(b.card) ? a : b);
-    }
+    const skuz = plays.find(m => m.card.suit === 'T' && m.card.rank === '★');
+    if (skuz) return skuz;
+    const singletonKing = plays.find(m =>
+      m.card.rank === 'K' && hand.filter(c => c.suit === m.card.suit).length === 1
+    );
+    if (singletonKing) return singletonKing;
+    // Exclude Mond without Sküs (Mond Fang bait) and Pagat while other tarocks remain (Ultimo risk)
+    const hasSküs = tarocks.some(c => c.rank === '★');
+    const blocked = new Set<string>();
+    if (!hasSküs) blocked.add('TXXI');
+    if (tarocks.length > 1) blocked.add('TI');
+    const pool = plays.filter(m => !blocked.has(m.card.suit + m.card.rank));
+    return weakestMove(pool.length > 0 ? pool : plays);
   }
 
-  // Can't win: discard weakest card to minimise card-point giveaway
-  return plays.reduce((a, b) => _cardRank(a.card) < _cardRank(b.card) ? a : b);
+  return followTrickPolicy(plays, state.currentTrick);
 }
 
 // ── Exports ────────────────────────────────────────────────────────────────────

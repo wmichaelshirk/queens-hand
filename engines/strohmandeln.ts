@@ -6,6 +6,7 @@ import {
   cardPointValue, countCardPoints, isTarock, cardEquals, createDeck, shuffle,
   trickWinner as _trickWinnerFn,
   birdWinnerAtPos as _birdWinnerAtPosFn, inferVoids as _inferVoidsFn,
+  followTrickPolicy,
 } from '../lib/tarock';
 import type { TarockPlay, TarockTrickRecord } from '../lib/tarock';
 
@@ -562,7 +563,7 @@ function _breakdownItems(
 
   if (scoring === 'Beck') {
     const won = s.declarerCardPoints >= DECLARER_WINS_AT;
-    items.push({ label: `game (${won ? 'win' : 'loss'})`, declarerDelta: won ? 2 : -3 });
+    items.push({ label: `game (${won ? 'win' : 'loss'}, ${s.declarerCardPoints}–${s.defenderCardPoints})`, declarerDelta: won ? 2 : -3 });
     bi(s.pagatUltimoWinner, 'Pagat Ultimo');
     bi(s.trullWinner,       'Trull');
     bi(s.royalTrullWinner,  'Royal Trull');
@@ -578,7 +579,7 @@ function _breakdownItems(
       // Trull + Royal Trull replaced by Valat
     } else {
       const won = s.declarerCardPoints >= DECLARER_WINS_AT;
-      items.push({ label: `game (${won ? 'win' : 'loss'})`, declarerDelta: won ? 3 : -4 });
+      items.push({ label: `game (${won ? 'win' : 'loss'}, ${s.declarerCardPoints}–${s.defenderCardPoints})`, declarerDelta: won ? 3 : -4 });
       bi(s.pagatUltimoWinner, 'Pagat Ultimo');
       bi(s.uhuWinner,         'Uhu');
       bi(s.kakaduWinner,      'Kakadu');
@@ -755,27 +756,6 @@ function _uncoverPile(s: State, pi: number, pileIdx: number, events: BareEvent[]
 }
 
 /**
- * Process the initial strawman uncovering for both players (called once after dealing,
- * before bidding begins). Each pile is processed left-to-right via _uncoverPile:
- * T/K tops cascade immediately to the player's hand (CARD_REVEALED + CARDS_MOVED);
- * normal suit cards stop the cascade and remain face-up as the playable pile top.
- * The bottom card is NOT moved here — it only goes to hand when it becomes the
- * last remaining card in its pile (handled by _uncoverPile during play).
- */
-function uncoverStrawmenInitial(state: State): EngineResult<State> {
-  const s      = cloneState(state);
-  const events: BareEvent[] = [];
-
-  for (let pi = 0; pi < PLAYER_COUNT; pi++) {
-    for (let pileIdx = 0; pileIdx < STRAWMAN_PILE_COUNT; pileIdx++) {
-      _uncoverPile(s, pi, pileIdx, events, false);
-    }
-  }
-
-  return { state: s, events };
-}
-
-/**
  * Apply handMultiplier to the entire score (basic + bonuses) and reset multiplier to 1.
  * The no-bid draw path sets nextHandMultiplier; declared hands always clear it.
  */
@@ -879,7 +859,7 @@ function _noBidBreakdownItems(state: State): Array<{ label: string; p0Delta: num
     bi(valatWinner, 'Valat', 12);
   } else {
     const winner = p0pts > p1pts ? 0 : 1;
-    bi(winner, 'game (no-bid)', SCORING_SYSTEMS[state.scoring].noDeclarerValue);
+    bi(winner, `game (no-bid, ${p0pts}–${p1pts})`, SCORING_SYSTEMS[state.scoring].noDeclarerValue);
   }
 
   const birdPositions = state.scoring === 'Beck' ? [1] : [1, 2, 3, 4];
@@ -951,6 +931,15 @@ function _applyBid(state: State, move: Move, simulate: boolean): EngineResult<St
     } else {
       s.declarer = null;
       s.phase    = 'playing';
+    }
+  }
+
+  // Piles were face-down during bidding; uncover them now that play begins.
+  if (s.phase === 'playing') {
+    for (let p = 0; p < PLAYER_COUNT; p++) {
+      for (let pIdx = 0; pIdx < STRAWMAN_PILE_COUNT; pIdx++) {
+        _uncoverPile(s, p, pIdx, events, simulate);
+      }
     }
   }
 
@@ -1214,6 +1203,19 @@ function getReward(state: State, playerIndex: number): number | null {
   return (Math.tanh(raw / REWARD_SCALE) + 1) / 2;
 }
 
+// ── Rollout policy ─────────────────────────────────────────────────────────────
+
+export function rolloutPolicy(state: State, legal: Move[]): Move {
+  if (state.phase !== 'playing') return legal[Math.floor(Math.random() * legal.length)]!;
+
+  const plays = legal.filter((m): m is { type: 'PLAY_CARD'; card: Card } => m.type === 'PLAY_CARD');
+
+  // Leading: random — strategic, leave it to the tree
+  if (state.currentTrick.length === 0) return plays[Math.floor(Math.random() * plays.length)]!;
+
+  return followTrickPolicy(plays, state.currentTrick);
+}
+
 // ── Exports ───────────────────────────────────────────────────────────────────
 
 export {
@@ -1226,7 +1228,7 @@ export {
   // Card utilities
   createDeck, shuffle, cardEquals, cardPointValue, countCardPoints, isTarock,
   // State lifecycle
-  dealState, getDealEvents, cloneState, uncoverStrawmenInitial,
+  dealState, getDealEvents, cloneState,
   // Queries
   getCurrentPlayer, getLegalMoves,
   isHandOver, isGameOver, getHandResult, computeHandSummary, computeScoreBreakdown,
