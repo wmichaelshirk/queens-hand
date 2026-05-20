@@ -41,28 +41,26 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 0.25rem;
   }
 
   /* ── Avatar ──────────────────────────────────────────────────────── */
 
   .avatar-wrap {
     position: relative;
-    width: 40px;
-    height: 40px;
-    margin-bottom: 10px; /* clearance for score badge below */
+    width: 48px;
+    height: 48px;
   }
 
   .avatar {
-    width: 40px;
-    height: 40px;
+    width: 48px;
+    height: 48px;
     border-radius: 50%;
     background: #1a2a40;
     border: 2px solid #2a3a50;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 1rem;
+    font-size: 2rem;
     color: #555;
     transition: border-color 0.15s, box-shadow 0.15s;
   }
@@ -76,15 +74,14 @@
 
   .badge {
     position: absolute;
-    min-width: 18px;
-    height: 18px;
-    border-radius: 9px;
+    min-width: 24px;
+    height: 24px;
+    border-radius: 12px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 0.5rem;
+    font-size: .9rem;
     font-weight: 700;
-    padding: 0 3px;
     line-height: 1;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
   }
@@ -98,21 +95,20 @@
   }
 
   .badge-role {
-    top: -5px;
-    right: -5px;
-    background: #1a2a40;
+    top: -10px;
+    right: -10px;
+    background: #888;
     border: 1px solid #2a3a50;
-    font-size: 0.7rem;
   }
 
   .badge-score {
-    bottom: -12px;
-    left: 50%;
-    transform: translateX(-50%);
+    right: -32px;
+    top: 50%;
+    /* left: 50%; */
+    transform: translateY(-50%);
     background: #1a2a40;
     border: 1px solid #2a3a50;
     color: #aaa;
-    font-size: 0.55rem;
     min-width: 20px;
     padding: 1px 4px;
     white-space: nowrap;
@@ -121,14 +117,17 @@
   /* ── Name ────────────────────────────────────────────────────────── */
 
   .player-name {
-    font-size: 0.62rem;
-    color: #888;
-    text-transform: uppercase;
+    background-color: #555;
+    padding: 4px 6px;
+    border-radius: 8px;
+    font-size: 1rem;
+    color: #bbb;
     letter-spacing: 0.06em;
-    max-width: 68px;
+    max-width: 10rem;
     text-align: center;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    border: 1px solid black
   }
 </style>

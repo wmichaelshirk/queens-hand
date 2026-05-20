@@ -33,7 +33,10 @@ export type AnimEvent =
   | { type: 'BID_MADE'; player: number; bid: string }
   | { type: 'BID_PASSED'; player: number }
   | { type: 'HAND_SCORED'; deltas: { player: number; delta: number; reason: string }[]; runningTotals: number[] }
-  | { type: 'TURN_CHANGED' | 'ANNOUNCEMENT_MADE' | 'CONTRACT_SET' | 'GAME_STARTED' | 'HAND_STARTED' | 'GAME_OVER' }
+  | { type: 'ANNOUNCEMENT_MADE'; player: number; announcement: string }
+  | { type: 'CONTRACT_SET'; declarer: number; contract: string }
+  | { type: 'GAME_OVER'; losers?: number[] }
+  | { type: 'TURN_CHANGED' | 'GAME_STARTED' | 'HAND_STARTED' }
   | { type: 'DEAL'; dealer: number; to: number; zone: 'hand' | 'strawman'; pile?: number; count: number };
 
 export type GameSeat = {

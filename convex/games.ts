@@ -62,7 +62,7 @@ const GAME_CONFIG = {
 const GAME_DEFAULT_SETTINGS: Record<string, Record<string, unknown>> = {
   slobberhannes: {},
   strohmandeln:  { scoring: 'Mayr' },
-  dreiertarock:  { scoring: 'Mayr' },
+  dreiertarock:  { scoring: 'Mayr', deckType: '54' },
 };
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
@@ -227,13 +227,15 @@ const strahAdapter: EngineAdapter = {
 
 const dreitAdapter: EngineAdapter = {
   start({ seats, scores, firstPlayer, settings }) {
+    const deckType42 = (settings.deckType as '54' | '42' | undefined) ?? '54';
     const state = Dreiertarock.dealState({
       scores: scores ?? null,
       dealerIndex: firstPlayer,
       scoring: (settings.scoring as Dreiertarock.ScoringSystemName | undefined) ?? "Mayr",
       playerCount: seats as 3 | 4,
+      deckType: deckType42,
     });
-    return { state, events: Dreiertarock.getDealEvents(firstPlayer, seats as 3 | 4) };
+    return { state, events: Dreiertarock.getDealEvents(firstPlayer, seats as 3 | 4, deckType42) };
   },
   getLegalMoves(state) {
     return Dreiertarock.getLegalMoves(state) as Move[];
@@ -249,23 +251,25 @@ const dreitAdapter: EngineAdapter = {
   reDeal(state, settings) {
     const playerCount = (state as Dreiertarock.State).playerCount ?? 3;
     const newDealerIndex = ((state as Dreiertarock.State).dealerIndex + 1) % playerCount;
+    const reDealDeckType = (state as Dreiertarock.State).deckType ?? '54';
     const newState = Dreiertarock.dealState({
       scores: state.scores,
       dealerIndex: newDealerIndex,
       scoring: (settings.scoring as Dreiertarock.ScoringSystemName | undefined) ?? (state as Dreiertarock.State).scoring ?? "Mayr",
       playerCount,
+      deckType: reDealDeckType,
     });
-    return { state: newState, events: Dreiertarock.getDealEvents(newDealerIndex, playerCount) };
+    return { state: newState, events: Dreiertarock.getDealEvents(newDealerIndex, playerCount, reDealDeckType) };
   },
   chooseBotMove(state, playerIndex) {
     const s = state as Dreiertarock.State;
 
     if (s.phase === 'bidding') {
-      const rewards = evaluateMoves(Dreiertarock, s, playerIndex, { iterations: 800, rolloutPolicy: Dreiertarock.rolloutPolicy, movePrior: Dreiertarock.movePrior });
+      const rewards = evaluateMoves(Dreiertarock, s, playerIndex, { iterations: 50, rolloutPolicy: Dreiertarock.rolloutPolicy, movePrior: Dreiertarock.movePrior, moveKey: Dreiertarock.moveKey });
 
       // Base option: PASS_BID if legal (non-forehand); otherwise MAKE_BID('Single') for forehand
-      const passKey   = JSON.stringify({ type: 'PASS_BID' });
-      const singleKey = JSON.stringify({ type: 'MAKE_BID', bid: 'Single' });
+      const passKey   = Dreiertarock.moveKey({ type: 'PASS_BID' });
+      const singleKey = Dreiertarock.moveKey({ type: 'MAKE_BID', bid: 'Single' });
       const baseEntry = rewards.get(passKey) ?? rewards.get(singleKey);
       const baseReward = baseEntry?.avgReward ?? 0.5;
 
@@ -292,8 +296,8 @@ const dreitAdapter: EngineAdapter = {
     }
 
     if (s.phase === 'declaring') {
-      const rewards    = evaluateMoves(Dreiertarock, s, playerIndex, { iterations: 600, rolloutPolicy: Dreiertarock.rolloutPolicy });
-      const passKey    = JSON.stringify({ type: 'PASS_ANNOUNCEMENT' });
+      const rewards    = evaluateMoves(Dreiertarock, s, playerIndex, { iterations: 600, rolloutPolicy: Dreiertarock.rolloutPolicy, moveKey: Dreiertarock.moveKey });
+      const passKey    = Dreiertarock.moveKey({ type: 'PASS_ANNOUNCEMENT' });
       const passReward = rewards.get(passKey)?.avgReward ?? 0.5;
 
       // Batch profitable announcements; allow at most one kontra per turn.
@@ -335,9 +339,9 @@ const dreitAdapter: EngineAdapter = {
     // random rollouts slightly inflate Single's apparent value (declared play looks active),
     // so require a meaningful margin before committing to a declared game.
     if (s.phase === 'contract_choice') {
-      const rewards      = evaluateMoves(Dreiertarock, s, playerIndex, { iterations: 1500, rolloutPolicy: Dreiertarock.rolloutPolicy });
-      const singleKey    = JSON.stringify({ type: 'CHOOSE_CONTRACT', contract: 'Single' });
-      const trischakenKey = JSON.stringify({ type: 'CHOOSE_CONTRACT', contract: 'Trischaken' });
+      const rewards      = evaluateMoves(Dreiertarock, s, playerIndex, { iterations: 1500, rolloutPolicy: Dreiertarock.rolloutPolicy, moveKey: Dreiertarock.moveKey });
+      const singleKey    = Dreiertarock.moveKey({ type: 'CHOOSE_CONTRACT', contract: 'Single' });
+      const trischakenKey = Dreiertarock.moveKey({ type: 'CHOOSE_CONTRACT', contract: 'Trischaken' });
       const singleReward    = rewards.get(singleKey)?.avgReward    ?? 0;
       const trischakenReward = rewards.get(trischakenKey)?.avgReward ?? 0;
       return (singleReward >= trischakenReward + 0.06
@@ -349,7 +353,7 @@ const dreitAdapter: EngineAdapter = {
     const iterations = s.phase === 'exchange' ? 1500
                      : s.phase === 'discard'  ? 1000
                      : 400;
-    return chooseMove(Dreiertarock, s, playerIndex, { iterations, rolloutPolicy: Dreiertarock.rolloutPolicy, movePrior: Dreiertarock.movePrior }) as Move;
+    return chooseMove(Dreiertarock, s, playerIndex, { iterations, rolloutPolicy: Dreiertarock.rolloutPolicy, movePrior: Dreiertarock.movePrior, moveKey: Dreiertarock.moveKey }) as Move;
   },
   getHands(state) { return state.hands as Card[][]; },
   getCurrentBid(state) { return (state as Dreiertarock.State).currentBid ?? null; },
@@ -503,7 +507,6 @@ async function _startGame(
 
   await ctx.db.patch(gameId, { status: "active", initialState: state });
 
-  // Insert initial events as chat messages
   const seatNames = await Promise.all(
     seats.map(async (s) => {
       const p = await ctx.db.get(s.playerId);
@@ -511,18 +514,6 @@ async function _startGame(
     })
   );
 
-  if (events.length > 0) {
-    const msgs = formatEvents(events, seatNames);
-    for (const text of msgs) {
-      await ctx.db.insert("table_messages", {
-        gameId,
-        playerId: game.creatorPlayerId,
-        displayName: "Game",
-        text,
-        ts: Date.now(),
-      });
-    }
-  }
 
   // Schedule bots if the first player to act is a bot
   if (currentPlayer >= 0) {
@@ -935,6 +926,16 @@ export const getGameCatalog = query({
             label: Dreiertarock.SCORING_SYSTEMS[k].name,
           })),
         },
+        {
+          type: "select" as const,
+          key: "deckType",
+          label: "Deck",
+          default: "54",
+          choices: [
+            { value: "54", label: "54-card (standard)" },
+            { value: "42", label: "42-card" },
+          ],
+        },
       ],
     },
   ],
@@ -1310,19 +1311,6 @@ async function _applyMoveLogic(
     };
   }
 
-  // Insert event messages into chat
-  if (events.length > 0) {
-    const msgs = formatEvents(events, seatNames);
-    for (const text of msgs) {
-      await ctx.db.insert("table_messages", {
-        gameId,
-        playerId: game.creatorPlayerId,
-        displayName: "Game",
-        text,
-        ts: Date.now(),
-      });
-    }
-  }
 
   // Persist last hand summary so the UI can display it prominently
   const handScoredEvent = events.find((e) => e.type === "HAND_SCORED") as
@@ -1378,26 +1366,6 @@ async function _applyMoveLogic(
       game.settings as Record<string, unknown>
     );
 
-    await ctx.db.insert("table_messages", {
-      gameId,
-      playerId: game.creatorPlayerId,
-      displayName: "Game",
-      text: "— New hand —",
-      ts: Date.now(),
-    });
-
-    if (dealEvents.length > 0) {
-      const msgs = formatEvents(dealEvents, seatNames);
-      for (const text of msgs) {
-        await ctx.db.insert("table_messages", {
-          gameId,
-          playerId: game.creatorPlayerId,
-          displayName: "Game",
-          text,
-          ts: Date.now(),
-        });
-      }
-    }
 
     await ctx.db.patch(liveStateRow._id, { state: newHandState });
     await _updatePublicAndHands(ctx, gameId, newHandState, sortedSeats, adapter, undefined, dealEvents);
@@ -1550,6 +1518,7 @@ async function _enterBetweenHands(
     nextDealerIndex: ((handOverState.dealerIndex ?? 0) + 1) % playerCount,
     scoring: handOverState.scoring ?? "Mayr",
     playerCount,
+    deckType: (handOverState as Dreiertarock.State).deckType ?? '54',
   };
 
   // Delete all live rows — they are no longer needed
@@ -1622,6 +1591,7 @@ async function _startNextHand(
     nextDealerIndex: number;
     scoring: string;
     playerCount?: number;
+    deckType?: '54' | '42';
   };
 
   let newState: any;
@@ -1633,8 +1603,9 @@ async function _startNextHand(
       dealerIndex: cd.nextDealerIndex,
       scoring: (cd.scoring ?? "Mayr") as Dreiertarock.ScoringSystemName,
       playerCount: (cd.playerCount ?? 3) as 3 | 4,
+      deckType: cd.deckType ?? '54',
     });
-    dealEvents = Dreiertarock.getDealEvents(cd.nextDealerIndex, (cd.playerCount ?? 3) as 3 | 4);
+    dealEvents = Dreiertarock.getDealEvents(cd.nextDealerIndex, (cd.playerCount ?? 3) as 3 | 4, cd.deckType ?? '54');
   } else {
     newState = Strohmandeln.dealState({
       scores: cd.scores,
@@ -1685,18 +1656,6 @@ async function _startNextHand(
     })
   );
 
-  if (dealEvents.length > 0) {
-    const msgs = formatEvents(dealEvents, seatNames);
-    for (const text of msgs) {
-      await ctx.db.insert("table_messages", {
-        gameId,
-        playerId: game.creatorPlayerId,
-        displayName: "Game",
-        text,
-        ts: Date.now(),
-      });
-    }
-  }
 
   if (currentPlayer >= 0) {
     const currentSeat = sortedSeats[currentPlayer];

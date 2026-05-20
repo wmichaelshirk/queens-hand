@@ -92,8 +92,10 @@ function _runISMCTS<TState, TMove extends object>(
     const path: Node<TMove>[] = [root];
 
     // ── Selection ─────────────────────────────────────────────────────────
+    let selectionLegal: TMove[] | null = null;
     while (!eng.isHandOver(ws)) {
-      const legal = eng.getLegalMoves(ws);
+      selectionLegal = eng.getLegalMoves(ws);
+      const legal = selectionLegal;
       for (const m of legal) {
         const c = node.children.get(moveKey(m));
         if (c) c.avail++;
@@ -104,13 +106,14 @@ function _runISMCTS<TState, TMove extends object>(
       const next = bestUCB(node, legal, moveKey, isOwn);
       if (!next) break;
       ({ state: ws } = eng.applyMove(ws, next.move!, true));
+      selectionLegal = null;   // ws changed; cached legal is stale
       node = next;
       path.push(node);
     }
 
     // ── Expansion ──────────────────────────────────────────────────────────
     if (!eng.isHandOver(ws)) {
-      const legal = eng.getLegalMoves(ws);
+      const legal = selectionLegal ?? eng.getLegalMoves(ws);
       let m: TMove | undefined;
       const weights = movePrior ? movePrior(ws, legal) : null;
       if (weights) {

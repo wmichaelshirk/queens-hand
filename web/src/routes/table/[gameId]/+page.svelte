@@ -8,7 +8,7 @@
     convex, watchQuery,
   } from "$lib/convex";
   import { GAME_OPTIONS, GAME_REGISTRY } from "$lib/gameConfig";
-  import type { Card, Move, StrawmanPileInfo, AnimEvent, GameState } from "$lib/gameTypes";
+  import type { Card, Move, StrawmanPileInfo, AnimEvent, GameState, GameSeat } from "$lib/gameTypes";
   import HandResultModal from "$lib/components/HandResultModal.svelte";
   import GameTableSlobberhannes from "$lib/components/GameTableSlobberhannes.svelte";
   import GameTableStrohmandeln from "$lib/components/GameTableStrohmandeln.svelte";
@@ -257,6 +257,73 @@
 
   // ── Card animations ────────────────────────────────────────────────────────────
 
+  function formatAnimEvents(events: AnimEvent[], seats: GameSeat[]): string[] {
+    const name = (i: number) => seats.find(s => s.enginePlayerIndex === i)?.displayName ?? `Player ${i + 1}`;
+    const msgs: string[] = [];
+    for (const ev of events) {
+      switch (ev.type) {
+        case 'CARD_PLAYED':
+          msgs.push(`${name(ev.player)} played ${ev.card.rank}${ev.card.suit}`);
+          break;
+        case 'TRICK_RESOLVED':
+          msgs.push(`${name(ev.winner)} won the trick`);
+          break;
+        case 'HAND_SCORED': {
+          const deltas = ev.deltas.map(d => `${name(d.player)}: ${d.delta > 0 ? '+' : ''}${d.delta}`).join('  ');
+          const totals = ev.runningTotals.map((t, i) => `${name(i)}: ${t}`).join('  ');
+          msgs.push(`Hand: ${deltas}  |  Running: ${totals}`);
+          break;
+        }
+        case 'GAME_OVER': {
+          const losers = ev.losers?.map(i => name(i)).join(', ');
+          msgs.push(losers ? `Game over! Loser(s): ${losers}` : 'Game over!');
+          break;
+        }
+        case 'BID_MADE':
+          msgs.push(`${name(ev.player)} bid: ${ev.bid}`);
+          break;
+        case 'BID_PASSED':
+          msgs.push(`${name(ev.player)} passed`);
+          break;
+        case 'CARD_REVEALED':
+          msgs.push(`${ev.card.rank}${ev.card.suit} revealed from ${name(ev.player)}'s pile ${ev.pile + 1}`);
+          break;
+        case 'CONTRACT_SET':
+          msgs.push(ev.contract === 'Trischaken'
+            ? 'Trischaken — every player for themselves'
+            : `${name(ev.declarer)} declared ${ev.contract}`);
+          break;
+        case 'ANNOUNCEMENT_MADE':
+          msgs.push(ev.announcement === 'pass'
+            ? `${name(ev.player)} passed`
+            : `${name(ev.player)} announced ${ev.announcement}`);
+          break;
+        case 'CARDS_MOVED':
+          if (ev.reason === 'talon-exchange') {
+            const taken = ev.transfers.filter(t => t.to.zone === 'hand');
+            if (taken.length > 0) {
+              const player = (taken[0]!.to as { zone: 'hand'; player: number }).player;
+              const cards = taken.map(t => `${t.card.rank}${t.card.suit}`).join(' ');
+              msgs.push(`${name(player)} took ${cards}`);
+            }
+          } else {
+            for (const t of ev.transfers) {
+              if (t.from.zone === 'strawman' && t.to.zone === 'hand') {
+                msgs.push(`${t.card.rank}${t.card.suit} → ${name((t.to as { zone: 'hand'; player: number }).player)}'s hand`);
+              }
+            }
+          }
+          break;
+        case 'DEAL':
+          msgs.push(ev.zone === 'hand'
+            ? `${name(ev.dealer)} deals ${ev.count} card${ev.count !== 1 ? 's' : ''} to ${name(ev.to)}`
+            : `${name(ev.dealer)} deals to ${name(ev.to)}'s pile ${(ev.pile ?? 0) + 1}`);
+          break;
+      }
+    }
+    return msgs;
+  }
+
   // Gate incoming state updates through the animation system.
   $effect(() => {
     const incoming = $gameState;
@@ -265,6 +332,12 @@
     const key = JSON.stringify(incoming.publicState.recentEvents);
     if (key === _lastEventKey) return;
     _lastEventKey = key;
+
+    if (incoming.publicState.recentEvents?.length) {
+      for (const msg of formatAnimEvents(incoming.publicState.recentEvents, incoming.seats)) {
+        console.log(msg);
+      }
+    }
 
     if (_animRunning) {
       _pendingQueue.push(incoming);

@@ -38,13 +38,6 @@
 </script>
 
 <div class="hand-section">
-  <div class="hand-label">
-    {#if discardMode}
-      Select cards to discard
-    {:else}
-      {isMyTurn ? "Your turn — click a card to play" : "Your hand"}
-    {/if}
-  </div>
   <div class="hand-cards">
     {#each sortHand(cards) as card (`${card.suit}${card.rank}`)}
       {#if discardMode}

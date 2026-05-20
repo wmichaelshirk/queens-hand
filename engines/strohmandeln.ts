@@ -3,6 +3,7 @@ import type { ISMCTSEngine } from '../lib/engine';
 import { bipartiteMatch } from '../lib/matching';
 import {
   TAROCK_RANKS, BLACK_RANKS, RED_RANKS, BLACK_SUITS, RED_SUITS,
+  TRULL_RANKS,
   cardPointValue, countCardPoints, isTarock, cardEquals, createDeck, shuffle,
   trickWinner as _trickWinnerFn,
   birdWinnerAtPos as _birdWinnerAtPosFn, inferVoids as _inferVoidsFn,
@@ -113,8 +114,7 @@ const STRAWMAN_PILE_SIZE    = 4;
 const TRICKS_PER_HAND       = INITIAL_HAND_SIZE + STRAWMAN_PILE_COUNT * STRAWMAN_PILE_SIZE; // 27
 const DECLARER_WINS_AT      = 36;   // card points needed by declarer; 70 total
 
-// Cards required for each announcement
-const TRULL_RANKS       = new Set(['★', 'XXI', 'I']);
+// Cards required for each announcement (TRULL_RANKS imported from lib/tarock)
 const ROYAL_TRULL_RANKS = new Set<string>(['K']);  // need 4 of these
 
 // ── Domain types ──────────────────────────────────────────────────────────────

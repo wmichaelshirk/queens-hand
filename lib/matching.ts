@@ -32,9 +32,11 @@ export function bipartiteMatch(
   slotCount: number,
   canUse:    (cardIdx: number, slotIdx: number) => boolean,
 ): number[] | null {
-  const match = new Array<number>(slotCount).fill(-1);
+  const match   = new Array<number>(slotCount).fill(-1);
+  const visited = new Uint8Array(slotCount);
   for (let ci = 0; ci < cardCount; ci++) {
-    _augment(ci, match, new Uint8Array(slotCount), canUse);
+    visited.fill(0);
+    _augment(ci, match, visited, canUse);
   }
   return match.some(m => m === -1) ? null : match;
 }

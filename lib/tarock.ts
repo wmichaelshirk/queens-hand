@@ -29,6 +29,16 @@ export const CARD_POINT_VALUES: Record<string, number> = {
   K: 4, Q: 3, Kn: 2, J: 1,
 };
 
+// 42-card suit ranks (top 5 only; no 9 8 7 in black, no 2 3 4 in red)
+export const BLACK_RANKS_42 = ['K', 'Q', 'Kn', 'J', '10'] as const;
+export const RED_RANKS_42   = ['K', 'Q', 'Kn', 'J', 'A']  as const;
+
+// 42-card single counting: K/Trull = 5, Q = 4, Kn = 3, J = 2, other trumps = 1, low suit = 0
+export const CARD_POINT_VALUES_42: Record<string, number> = {
+  '★': 5, 'XXI': 5, 'I': 5,
+  K: 5, Q: 4, Kn: 3, J: 2,
+};
+
 // ── Shared types ───────────────────────────────────────────────────────────────
 
 export interface TarockPlay {
@@ -57,7 +67,23 @@ export function countCardPoints(cards: Card[]): number {
   return cards.reduce((sum, c) => sum + cardPointValue(c), 0) + groups;
 }
 
+export function cardPointValue42(card: Card): number {
+  const v = CARD_POINT_VALUES_42[card.rank];
+  if (v !== undefined) return v;
+  if (isTarock(card)) return 1; // tarocks II–XX
+  return 0;                     // small suit cards (10, A)
+}
+
+/** Single-card counting for 42-card game. Total across all players = 90. */
+export function countCardPoints42(cards: Card[]): number {
+  return cards.reduce((sum, c) => sum + cardPointValue42(c), 0);
+}
+
+export const TRULL_RANKS = new Set<string>(['★', 'XXI', 'I']);
+
 export function isTarock(c: Card): boolean { return c.suit === 'T'; }
+
+export function cardKey(card: Card): string { return card.suit + card.rank; }
 
 export function cardEquals(a: Card, b: Card): boolean {
   return a.suit === b.suit && a.rank === b.rank;
@@ -72,6 +98,15 @@ export function createDeck(): Card[] {
   return [...tarocks, ...suitCards]; // 22 + 32 = 54
 }
 
+export function createDeck42(): Card[] {
+  const tarocks: Card[] = TAROCK_RANKS.map(rank => ({ suit: 'T' as const, rank }));
+  const suitCards: Card[] = [
+    ...BLACK_SUITS.flatMap(suit => BLACK_RANKS_42.map(rank => ({ suit, rank }))),
+    ...RED_SUITS.flatMap(suit   => RED_RANKS_42.map(rank   => ({ suit, rank }))),
+  ];
+  return [...tarocks, ...suitCards]; // 22 + 20 = 42
+}
+
 export function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
@@ -83,18 +118,22 @@ export function shuffle<T>(arr: T[]): T[] {
 
 // ── Trick resolution ───────────────────────────────────────────────────────────
 
-export function trickStrength(card: Card, ledSuit: string): number {
-  if (isTarock(card)) return 1000 + (TAROCK_RANK_ORDER[card.rank] ?? 0);
+export function trickStrength(card: Card, ledSuit: string, suitSolo?: boolean): number {
+  if (isTarock(card)) {
+    // In Suit Solo, trumps cannot win a trick led with a suit card
+    if (suitSolo && ledSuit !== 'T') return -1;
+    return 1000 + (TAROCK_RANK_ORDER[card.rank] ?? 0);
+  }
   if (card.suit !== ledSuit) return -1;
   return (BLACK_SUITS_SET.has(card.suit) ? BLACK_RANK_ORDER : RED_RANK_ORDER)[card.rank] ?? 0;
 }
 
-export function trickWinner(trick: TarockPlay[], ledSuit: string): number {
-  let best = 0;
+export function trickWinner(trick: TarockPlay[], ledSuit: string, suitSolo?: boolean): number {
+  let best    = 0;
+  let bestStr = trickStrength(trick[0]!.card, ledSuit, suitSolo);
   for (let i = 1; i < trick.length; i++) {
-    if (trickStrength(trick[i]!.card, ledSuit) > trickStrength(trick[best]!.card, ledSuit)) {
-      best = i;
-    }
+    const str = trickStrength(trick[i]!.card, ledSuit, suitSolo);
+    if (str > bestStr) { best = i; bestStr = str; }
   }
   return trick[best]!.playerIndex;
 }
@@ -108,13 +147,16 @@ export function cardRank(c: Card): number {
 }
 
 /** The card currently winning the in-progress trick, or null if the trick is empty. */
-export function currentTrickWinnerCard(trick: TarockPlay[], ledSuit: string): Card | null {
+export function currentTrickWinnerCard(trick: TarockPlay[], ledSuit: string, suitSolo?: boolean): Card | null {
   if (trick.length === 0) return null;
-  const tarocks = trick.filter(p => isTarock(p.card));
-  if (tarocks.length > 0) {
-    return tarocks.reduce((best, p) =>
-      (TAROCK_RANK_ORDER[p.card.rank] ?? 0) > (TAROCK_RANK_ORDER[best.card.rank] ?? 0) ? p : best
-    ).card;
+  // In Suit Solo, tarocks don't win when a suit is led
+  if (!suitSolo || ledSuit === 'T') {
+    const tarocks = trick.filter(p => isTarock(p.card));
+    if (tarocks.length > 0) {
+      return tarocks.reduce((best, p) =>
+        (TAROCK_RANK_ORDER[p.card.rank] ?? 0) > (TAROCK_RANK_ORDER[best.card.rank] ?? 0) ? p : best
+      ).card;
+    }
   }
   const ledCards = trick.filter(p => p.card.suit === ledSuit);
   if (ledCards.length === 0) return null;
@@ -125,7 +167,15 @@ export function currentTrickWinnerCard(trick: TarockPlay[], ledSuit: string): Ca
 }
 
 /** True if `card` would beat `winningCard` given the led suit. */
-export function headsCurrentTrick(card: Card, winningCard: Card, ledSuit: string): boolean {
+export function headsCurrentTrick(card: Card, winningCard: Card, ledSuit: string, suitSolo?: boolean): boolean {
+  if (suitSolo && ledSuit !== 'T') {
+    // In Suit Solo with a suit led: only a higher card of the led suit can head
+    if (isTarock(card)) return false;
+    if (card.suit !== ledSuit) return false;
+    if (isTarock(winningCard)) return true; // winningCard is a trump but shouldn't be winning; any led-suit card heads
+    const rankOrder = BLACK_SUITS_SET.has(ledSuit) ? BLACK_RANK_ORDER : RED_RANK_ORDER;
+    return (rankOrder[card.rank] ?? 0) > (rankOrder[winningCard.rank] ?? 0);
+  }
   if (isTarock(winningCard)) {
     return isTarock(card) && (TAROCK_RANK_ORDER[card.rank] ?? 0) > (TAROCK_RANK_ORDER[winningCard.rank] ?? 0);
   }
@@ -140,15 +190,21 @@ export function weakestMove<M extends { card: Card }>(moves: M[]): M {
   return moves.reduce((a, b) => cardRank(a.card) < cardRank(b.card) ? a : b);
 }
 
+/** Pick the strongest move by card rank. */
+export function strongestMove<M extends { card: Card }>(moves: M[]): M {
+  return moves.reduce((a, b) => cardRank(a.card) > cardRank(b.card) ? a : b);
+}
+
 /** Rollout follow policy: weakest winning card, or weakest overall if unable to win. */
 export function followTrickPolicy<M extends { card: Card }>(
-  plays: M[],
-  trick:  TarockPlay[],
+  plays:    M[],
+  trick:    TarockPlay[],
+  suitSolo?: boolean,
 ): M {
   const ledSuit    = trick[0]!.card.suit;
-  const winnerCard = currentTrickWinnerCard(trick, ledSuit);
+  const winnerCard = currentTrickWinnerCard(trick, ledSuit, suitSolo);
   if (winnerCard) {
-    const winning = plays.filter(m => headsCurrentTrick(m.card, winnerCard, ledSuit));
+    const winning = plays.filter(m => headsCurrentTrick(m.card, winnerCard, ledSuit, suitSolo));
     if (winning.length > 0) return weakestMove(winning);
   }
   return weakestMove(plays);

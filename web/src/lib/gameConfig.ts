@@ -43,5 +43,15 @@ export const GAME_OPTIONS: Record<string, GameOptionSpec[]> = {
         label: DREIT_SCORING_SYSTEMS[k].name,
       })),
     },
+    {
+      type: 'select',
+      key: 'deckType',
+      label: 'Deck',
+      default: '54',
+      choices: [
+        { value: '54', label: '54-card (standard)' },
+        { value: '42', label: '42-card' },
+      ],
+    },
   ],
 };
