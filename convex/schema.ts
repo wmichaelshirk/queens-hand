@@ -37,7 +37,8 @@ export default defineSchema({
     continuationVotes: v.optional(v.any()),
     // Score summary for the most recently completed hand (shown in UI)
     lastHandSummary: v.optional(v.any()),
-  }),
+  })
+    .index("by_status", ["status"]),
 
   game_seats: defineTable({
     gameId: v.id("games"),
@@ -120,10 +121,12 @@ export default defineSchema({
   // ── Table chat (per-game, cleared when game ends) ──────────────────────
   table_messages: defineTable({
     gameId: v.id("games"),
-    playerId: v.id("players"),
+    playerId: v.optional(v.id("players")),
     displayName: v.string(),
     text: v.string(),
     ts: v.number(),
+    isAiResponse: v.optional(v.boolean()),
   })
-    .index("by_game_ts", ["gameId", "ts"]),
+    .index("by_game_ts", ["gameId", "ts"])
+    .index("by_game_ai_ts", ["gameId", "isAiResponse", "ts"]),
 });

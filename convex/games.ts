@@ -1204,6 +1204,10 @@ export const updateSettings = mutation({
   },
 });
 
+function mentionsJudy(text: string): boolean {
+  return /@judy\b/i.test(text);
+}
+
 export const sendTableMessage = mutation({
   args: {
     gameId: v.id("games"),
@@ -1212,14 +1216,23 @@ export const sendTableMessage = mutation({
   },
   handler: async (ctx, { gameId, text, guestUserId }) => {
     const player = await resolvePlayer(ctx, guestUserId);
+    const trimmed = text.trim().slice(0, 500);
 
     await ctx.db.insert("table_messages", {
       gameId,
       playerId: player._id,
       displayName: player.displayName,
-      text: text.trim().slice(0, 500),
+      text: trimmed,
       ts: Date.now(),
     });
+
+    if (mentionsJudy(trimmed)) {
+      await ctx.scheduler.runAfter(0, internal.games.askAiAdvisor, {
+        gameId,
+        askingPlayerId: player._id,
+        question: trimmed,
+      });
+    }
   },
 });
 
@@ -1815,6 +1828,240 @@ export const applyBotMoves = internalAction({
   },
 });
 
+// ── AI Advisor ("Judy") ───────────────────────────────────────────────────────
+
+const GAME_RULES: Record<string, string> = {
+  slobberhannes:
+`Slobberhannes is a trick-avoidance game (3–6 players, no trumps).
+Rules: You must follow the led suit if able; otherwise play any card. Highest card of the led suit wins the trick.
+Penalties (each costs +1 point): winning the first trick, winning the last trick, winning any trick containing Q♣.
+Taking all three penalties in one hand costs +4 instead of +3 (sweep penalty).
+The player with the highest cumulative score when any player reaches the target (default 10) loses.`,
+
+  strohmandeln:
+`Strohmandeln is a 2-player trick-taking game using a 54-card Tarock deck.
+Tarocks (I–XXI plus Sküs ★) are permanent trumps. Key tarocks: Pagat (I, lowest), Mond (XXI), Sküs (★, highest).
+Suit cards rank K–Q–Kn–J–10–9–8–7 (black suits) or K–Q–Kn–J–A–2–3–4 (red suits).
+Suit-following (Farbzwang): follow led suit if able; if void, play a Tarock; if void in both, play any card.
+Strawman piles: three face-down piles are dealt; Tarocks or Kings cascade immediately to hand; other cards become strawman tops, entering hand when their pile runs out.
+Bidding: forehand may bid 'play' to become declarer, or pass; if both pass it's a no-bid hand.
+Declarer needs ≥36 card points (out of 70) to win; exactly 35 is a loss.
+Hand strength for bidding: bid 'play' when you hold several high tarocks (Mond XXI, Sküs ★, or multiple mid-range tarocks), Kings, or a long suit you can lead. A hand with many low tarocks and no Kings is risky to declare with.
+Card points: Trull cards (★, XXI, I) and Kings = 4 each; Queens = 3; Knights = 2; Jacks = 1; counted in groups of 3.
+Bonuses vary by scoring variant (Beck / Mayr-Sedlaczek): Pagat Ultimo, Trull, Royal Trull, and others.`,
+
+  dreiertarock:
+`Dreiertarock is a 3-player (or 4-player, dealer sits out) bidding Tarock game using a 54-card or 42-card deck.
+Tarocks (I–XXI + Sküs ★) are permanent trumps. Key tarocks: Pagat (I), Mond (XXI), Sküs (★, highest).
+Suit-following (Farbzwang): follow led suit if able; if void, play a Tarock; if void in both, play any card.
+Bidding: forehand must bid (cannot pass first). Bids in ascending order: Single < Double < Triple < Quadruple < Quintuple < Solo < SoloValat. When outbid, previous holder must immediately hold (match) or pass. If all pass forehand's Single, forehand chooses Single or Trischaken.
+Exchange (Single–Quintuple): both talon groups revealed; declarer picks one group; unchosen 3 go to defenders as a trick. Declarer then discards 3 cards (no Kings, Pagat, Mond, or Sküs; Tarocks II–XX only if forced).
+Declaring phase: players announce bonuses (Pagat Ultimo, Uhu, Kakadu, Mond Fang, Trull, Kings) or Kontra in circular order. Announcing a bonus doubles its value; failure doubles the penalty. Kontra doubles the game value (Rekontra ×4, Subkontra ×8).
+Declarer needs ≥36 card points (out of 70) to win; exactly 35 is a loss.
+Trischaken (no declarer): every player for themselves; player with most card points pays the others. Pagat cannot be played until it is your last Tarock.`,
+};
+
+function formatMove(move: Move): string {
+  switch (move.type) {
+    case "PLAY_CARD":         return `${move.card.rank}${move.card.suit}`;
+    case "MAKE_BID":          return move.bid;
+    case "PASS_BID":          return "Pass bid";
+    case "MAKE_ANNOUNCEMENT": return move.announcement;
+    case "PASS_ANNOUNCEMENT": return "Pass";
+    case "CHOOSE_CONTRACT":   return `Choose ${move.contract}`;
+    case "CHOOSE_TALON":      return `Pick ${move.choice} talon group`;
+    case "DISCARD_CARD":      return `Discard ${move.card.rank}${move.card.suit}`;
+    case "KONTRA":            return `${move.level ?? "Kontra"} ${move.target}`;
+    default:                  return (move as { type: string }).type;
+  }
+}
+
+type AdvisorContext = {
+  gameType: string; phase: string; trickNum: number;
+  myHand: Card[]; legalMoves: Move[];
+  currentTrick: { playerIndex: number; card: Card }[];
+  scores: number[];
+  seats: { displayName: string }[];
+  contract: string | undefined;
+  currentBid: string | undefined;
+  declarer: number | null;
+  announcements: { name: string; player: number }[];
+  lastAiResponseTs: number | null;
+};
+
+function buildAdvisorPrompt(context: AdvisorContext, question: string): string {
+  const rules = GAME_RULES[context.gameType] ?? "";
+  const legalMoveStr = context.legalMoves.length > 0
+    ? context.legalMoves.map(formatMove).join(", ")
+    : "none (not your turn)";
+  const trickStr = context.currentTrick.length > 0
+    ? context.currentTrick.map(p =>
+        `${context.seats[p.playerIndex]?.displayName ?? `Player ${p.playerIndex}`} played ${p.card.rank}${p.card.suit}`
+      ).join(", ")
+    : "none yet";
+  const scoreStr = context.scores
+    .map((s, i) => `${context.seats[i]?.displayName ?? i}: ${s}`)
+    .join(", ");
+
+  const lines = [
+    `You are Judy, the tutorial advisor for Queens Hand (traditional Austrian card game app). Your tone is calm, dry, and knowledgeable — like a patient card player who has seen it all. Never use exclamation points.`,
+    `Answer in 3–5 sentences maximum. Always reference the player's actual cards to make your advice concrete — don't just explain the rule in the abstract. No bullet points, no headers, no lists — plain prose only.`,
+    ``,
+    `=== RULES ===`,
+    rules,
+    ``,
+    `=== GAME STATE ===`,
+    `Game: ${context.gameType} | Phase: ${context.phase} | Trick ${context.trickNum}`,
+    `Your hand: ${context.myHand.map(c => `${c.rank}${c.suit}`).join(" ")}`,
+    `Legal moves: ${legalMoveStr}`,
+    `Current trick: ${trickStr}`,
+    `Scores: ${scoreStr}`,
+  ];
+  if (context.contract) lines.push(`Contract: ${context.contract}`);
+  if (context.currentBid) lines.push(`Current bid: ${context.currentBid}`);
+  if (context.declarer != null) lines.push(`Declarer: ${context.seats[context.declarer]?.displayName ?? context.declarer}`);
+  if (context.announcements.length > 0) {
+    lines.push(`Announcements: ${context.announcements.map(a => `${context.seats[a.player]?.displayName ?? a.player}: ${a.name}`).join(", ")}`);
+  }
+  lines.push(``, `=== PLAYER ASKS ===`, question);
+  return lines.join("\n");
+}
+
+export const getAiAdvisorContext = internalQuery({
+  args: { gameId: v.id("games"), askingPlayerId: v.id("players") },
+  handler: async (ctx, { gameId, askingPlayerId }) => {
+    const game = await ctx.db.get(gameId);
+    if (!game || game.status !== "active") return null;
+
+    const allSeats = await ctx.db
+      .query("game_seats")
+      .withIndex("by_game", (q) => q.eq("gameId", gameId))
+      .collect();
+    const sortedSeats = allSeats.sort((a, b) => a.seatIndex - b.seatIndex);
+
+    const myEngineIndex = sortedSeats.findIndex((s) => s.playerId === askingPlayerId);
+    if (myEngineIndex === -1) return null;
+
+    const publicState = await ctx.db
+      .query("game_public_state")
+      .withIndex("by_game", (q) => q.eq("gameId", gameId))
+      .unique();
+    if (!publicState) return null;
+
+    const liveState = await ctx.db
+      .query("game_live_state")
+      .withIndex("by_game", (q) => q.eq("gameId", gameId))
+      .unique();
+    if (!liveState) return null;
+
+    const handRow = await ctx.db
+      .query("player_hands")
+      .withIndex("by_game_and_player", (q) =>
+        q.eq("gameId", gameId).eq("playerId", askingPlayerId)
+      )
+      .unique();
+    const myHand = (handRow?.hand ?? []) as Card[];
+
+    const adapter = getAdapter(game.gameType as GameType);
+    const legalMoves: Move[] =
+      publicState.currentTurn === myEngineIndex
+        ? adapter.getLegalMoves(liveState.state)
+        : [];
+
+    const seats = await Promise.all(
+      sortedSeats.map(async (seat) => {
+        const player = await ctx.db.get(seat.playerId);
+        return { displayName: player?.displayName ?? "Unknown" };
+      })
+    );
+
+    const lastAiMsg = await ctx.db
+      .query("table_messages")
+      .withIndex("by_game_ai_ts", (q) => q.eq("gameId", gameId).eq("isAiResponse", true))
+      .order("desc")
+      .first();
+
+    return {
+      gameType: game.gameType,
+      phase: publicState.phase,
+      trickNum: publicState.trickNum,
+      myHand,
+      legalMoves,
+      currentTrick: publicState.currentTrick as { playerIndex: number; card: Card }[],
+      scores: publicState.scores,
+      seats,
+      contract: adapter.getContract(liveState.state) ?? undefined,
+      currentBid: adapter.getCurrentBid(liveState.state) ?? undefined,
+      declarer: adapter.getDeclarer(liveState.state),
+      announcements: adapter.getAnnouncements(liveState.state),
+      lastAiResponseTs: lastAiMsg?.ts ?? null,
+    };
+  },
+});
+
+export const insertAiResponse = internalMutation({
+  args: { gameId: v.id("games"), text: v.string() },
+  handler: async (ctx, { gameId, text }) => {
+    await ctx.db.insert("table_messages", {
+      gameId,
+      displayName: "Judy",
+      text,
+      ts: Date.now(),
+      isAiResponse: true,
+    });
+  },
+});
+
+export const askAiAdvisor = internalAction({
+  args: {
+    gameId: v.id("games"),
+    askingPlayerId: v.id("players"),
+    question: v.string(),
+  },
+  handler: async (ctx, { gameId, askingPlayerId, question }) => {
+    const context = await ctx.runQuery(internal.games.getAiAdvisorContext, {
+      gameId,
+      askingPlayerId,
+    });
+    if (!context) return;
+
+    if (context.lastAiResponseTs != null && Date.now() - context.lastAiResponseTs < 15_000) return;
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return;
+
+    const prompt = buildAdvisorPrompt(context, question);
+
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          generationConfig: { maxOutputTokens: 2048 },
+        }),
+      }
+    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = await res.json() as any;
+    const replyText: string | undefined = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!replyText) {
+      console.error("Judy: no reply text extracted from Gemini response");
+      await ctx.runMutation(internal.games.insertAiResponse, {
+        gameId,
+        text: "My thoughts are elsewhere at the moment — try asking again in a bit.",
+      });
+      return;
+    }
+
+    await ctx.runMutation(internal.games.insertAiResponse, {
+      gameId,
+      text: replyText.trim(),
+    });
+  },
+});
+
 // ── Cron job: cleanup stale tables and abandoned games ────────────────────────
 
 export const cleanupStaleGames = internalMutation({
@@ -1843,7 +2090,12 @@ export const cleanupStaleGames = internalMutation({
       return false;
     }
 
-    const allGames = await ctx.db.query("games").collect();
+    const [gamesWaiting, gamesActive, gamesBetweenHands] = await Promise.all([
+      ctx.db.query("games").withIndex("by_status", (q) => q.eq("status", "waiting")).collect(),
+      ctx.db.query("games").withIndex("by_status", (q) => q.eq("status", "active")).collect(),
+      ctx.db.query("games").withIndex("by_status", (q) => q.eq("status", "between_hands")).collect(),
+    ]);
+    const allGames = [...gamesWaiting, ...gamesActive, ...gamesBetweenHands];
 
     // Step 1: Delete stale waiting tables (no online humans, > 10 min since creation)
     for (const game of allGames) {

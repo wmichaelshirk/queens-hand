@@ -845,7 +845,7 @@
 
   // ── Table chat ─────────────────────────────────────────────────────────────────
 
-  type TableMsg = { _id: string; playerId: string; displayName: string; text: string; ts: number };
+  type TableMsg = { _id: string; playerId?: string; displayName: string; text: string; ts: number; isAiResponse?: boolean };
 
   let localMessages = $state<TableMsg[]>([]);
   let sinceTs = $state(Date.now());
@@ -1261,7 +1261,7 @@
         <div class="messages" bind:this={chatEl}>
           {#if localMessages.length > 0}
             {#each localMessages as msg (msg._id)}
-              <div class="msg" class:own={msg.playerId === currentPlayer?._id}>
+              <div class="msg" class:ai={msg.isAiResponse} class:own={!msg.isAiResponse && msg.playerId === currentPlayer?._id}>
                 <span class="msg-name">{msg.displayName}</span>
                 <span class="msg-text">{msg.text}</span>
               </div>
@@ -1850,6 +1850,8 @@
   }
 
   .msg.own .msg-name { color: #e94560; }
+  .msg.ai { border-left: 2px solid #c9a84c; padding-left: 0.4rem; font-style: italic; }
+  .msg.ai .msg-name { color: #c9a84c; }
 
   .msg-name {
     font-weight: 600;

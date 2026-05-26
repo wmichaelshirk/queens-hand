@@ -19,7 +19,11 @@ move validation + engine dispatch (`applyMove`), bot moves (ISMCTS internalActio
 Dealer rotation fixed for both games (random first dealer; rotate off `state.dealer`,
 not trick winner; eldest hand leads first trick).
 
-- [ ] REmove unused bots from the database.
+- [ ] Remove unused bots from the database.
+- [x] Reduce `cleanupStaleGames` Convex I/O: added `by_status` index to `games` table
+      so the cron never scans finished games; reduced cron frequency 5 min → 15 min.
+      Expected ~85–90% reduction in I/O from this function.
+
 ---
 
 ## Phase 2: Web UI
@@ -182,6 +186,18 @@ can display it.
 - [ ] Play log: scrollable, auto-scroll to latest; collapsed or hidden by default;
       expandable to review recent play
 - [ ] Table chat remains for player messages only; the two feeds must never be mixed
+
+### 2.15 AI chat advisor ("Judy") ✓
+- [x] Mentioning `@judy` in table chat triggers Gemini 2.5 Flash to respond in-chat
+      with concrete, game-state-aware advice (player's actual hand + legal moves +
+      current trick + scores fed into the prompt)
+- [x] Game rules for all three game types baked into the system prompt; advice references
+      the player's actual cards rather than generic rule recitation
+- [x] Rate-limited: at most one AI response per 15 seconds per table
+- [x] Judy messages styled distinctly in chat (italic, gold left border, no "own" class)
+- [x] Schema: `table_messages.playerId` made optional (Judy has no player doc);
+      `isAiResponse` flag added; `by_game_ai_ts` compound index for efficient last-reply
+      lookup; `by_status` index on `games` for cleanup cron
 
 ---
 
