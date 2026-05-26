@@ -4,8 +4,11 @@
   import { isVerticalSlot } from '$lib/tableLayout';
   import type { SlotName } from '$lib/tableLayout';
 
+  import type { AnimEvent } from '$lib/gameTypes';
+
   let {
-    name, isBot, cardCount, slot, score,
+    name, isBot, cardCount, slot, enginePlayerIndex,
+    recentEvents = [],
     isCurrentTurn = false, isDealer = false,
     isDeclarer = false, declarerActive = false,
   }: {
@@ -13,7 +16,8 @@
     isBot: boolean;
     cardCount: number;
     slot: SlotName;
-    score?: number;
+    enginePlayerIndex: number;
+    recentEvents?: AnimEvent[];
     isCurrentTurn?: boolean;
     isDealer?: boolean;
     isDeclarer?: boolean;
@@ -28,7 +32,7 @@
 
   {#if slot === 'left'}
     <div class="info-wrap">
-      <PlayerToken {name} {isBot} {score} {isDealer} {isDeclarer} {declarerActive} {isCurrentTurn} />
+      <PlayerToken {name} {isBot} {enginePlayerIndex} {recentEvents} {isDealer} {isDeclarer} {declarerActive} {isCurrentTurn} />
     </div>
     <div class="card-stack vert left-stack" style="--n: {safeCardCount}">
       {#if safeCardCount === 0}
@@ -47,15 +51,15 @@
       {/if}
     </div>
     <div class="info-wrap">
-      <PlayerToken {name} {isBot} {score} {isDealer} {isDeclarer} {declarerActive} {isCurrentTurn} />
+      <PlayerToken {name} {isBot} {enginePlayerIndex} {recentEvents} {isDealer} {isDeclarer} {declarerActive} {isCurrentTurn} />
     </div>
 
   {:else if slot === 'bottom'}
-    <PlayerToken {name} {isBot} {score} {isDealer} {isDeclarer} {declarerActive} {isCurrentTurn} />
+    <PlayerToken {name} {isBot} {enginePlayerIndex} {recentEvents} {isDealer} {isDeclarer} {declarerActive} {isCurrentTurn} />
 
   {:else}
     <!-- Horizontal top slots: token on top, fan below -->
-    <PlayerToken {name} {isBot} {score} {isDealer} {isDeclarer} {declarerActive} {isCurrentTurn} />
+    <PlayerToken {name} {isBot} {enginePlayerIndex} {recentEvents} {isDealer} {isDeclarer} {declarerActive} {isCurrentTurn} />
     <div class="card-stack horiz" style="--n: {safeCardCount}">
       {#if safeCardCount === 0}
         <span class="no-cards">—</span>
@@ -89,6 +93,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    z-index: 1;
   }
 
   /* ── Card stacks ─────────────────────────────────────────────── */

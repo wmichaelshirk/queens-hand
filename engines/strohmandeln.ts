@@ -480,7 +480,8 @@ function getHandResult(state: State): { declarerPoints: number; defenderPoints: 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 function _birdWinnerAtPos(trickLog: TrickRecord[], fromEnd: number): number | null {
-  return _birdWinnerAtPosFn(trickLog, fromEnd, TAROCK_RANKS.at(-fromEnd)!);
+  const result = _birdWinnerAtPosFn(trickLog, fromEnd, TAROCK_RANKS.at(-fromEnd)!);
+  return result.type === 'won' ? result.player : null;
 }
 
 /** Derive everything a scoring system needs from a completed hand. */

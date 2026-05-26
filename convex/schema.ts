@@ -80,6 +80,9 @@ export default defineSchema({
     dealer: v.optional(v.number()),
     currentBid: v.optional(v.string()),
     declarer: v.optional(v.number()),
+    contract: v.optional(v.string()),
+    announcements: v.optional(v.array(v.object({ name: v.string(), player: v.number() }))),
+    kontraItems: v.optional(v.array(v.object({ target: v.string(), multiplier: v.number() }))),
   })
     .index("by_game", ["gameId"]),
 

@@ -59,6 +59,9 @@ export type GamePublicState = {
   recentEvents: AnimEvent[];
   currentBid: string | null;
   declarer?: number;
+  contract?: string | null;
+  announcements?: { name: string; player: number }[];
+  kontraItems?: { target: string; multiplier: number }[];
 };
 
 export type ContinuationState = {

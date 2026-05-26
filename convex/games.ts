@@ -115,6 +115,9 @@ interface EngineAdapter {
   getHandBreakdown(state: any): NormalizedPlayerBreakdown[] | null;
   getCurrentBid(state: any): string | null;
   getDeclarer(state: any): number | null;
+  getContract(state: any): string | null;
+  getAnnouncements(state: any): { name: string; player: number }[];
+  getKontraItems(state: any): { target: string; multiplier: number }[];
 }
 
 const slobberAdapter: EngineAdapter = {
@@ -159,6 +162,9 @@ const slobberAdapter: EngineAdapter = {
   getHands(state) { return state.hands as Card[][]; },
   getCurrentBid(_state) { return null; },
   getDeclarer(_state) { return null; },
+  getContract(_state) { return null; },
+  getAnnouncements(_state) { return []; },
+  getKontraItems(_state) { return []; },
   getHandBreakdown(state) {
     const breakdown = Slobberhannes.getHandBreakdown(state as Slobberhannes.State);
     // Penalties are negated so delta < 0 means "bad" consistently across all engines.
@@ -213,6 +219,9 @@ const strahAdapter: EngineAdapter = {
   getHands(state) { return state.hands as Card[][]; },
   getCurrentBid(_state) { return null; },
   getDeclarer(state) { return (state as Strohmandeln.State).declarer; },
+  getContract(state) { return (state as Strohmandeln.State).declarer !== null ? 'play' : null; },
+  getAnnouncements(state) { return (state as Strohmandeln.State).announcements ?? []; },
+  getKontraItems(_state) { return []; },
   getHandBreakdown(state) {
     const breakdown = Strohmandeln.computeScoreBreakdown(state as Strohmandeln.State);
     if (!breakdown) return null;
@@ -358,6 +367,14 @@ const dreitAdapter: EngineAdapter = {
   getHands(state) { return state.hands as Card[][]; },
   getCurrentBid(state) { return (state as Dreiertarock.State).currentBid ?? null; },
   getDeclarer(state) { return (state as Dreiertarock.State).declarer; },
+  getContract(state) { return (state as Dreiertarock.State).contract ?? null; },
+  getAnnouncements(state) { return (state as Dreiertarock.State).announcements ?? []; },
+  getKontraItems(state) {
+    return ((state as Dreiertarock.State).kontraItems ?? []).map(k => ({
+      target: k.target,
+      multiplier: k.multiplier,
+    }));
+  },
   getHandBreakdown(state) {
     const breakdown = Dreiertarock.computeScoreBreakdown(state as Dreiertarock.State);
     if (!breakdown) return null;
@@ -492,6 +509,8 @@ async function _startGame(
     trickNum: state.trickNum ?? 0,
     phase: state.phase ?? "playing",
     recentEvents: startEvents,
+    announcements: [],
+    kontraItems: [],
     ...(startBid != null ? { currentBid: startBid as string } : {}),
   });
 
@@ -852,6 +871,9 @@ export const getMyGameState = query({
 
     const liveCurrentBid = liveState ? adapter.getCurrentBid(liveState.state) : null;
     const liveDeclarer = liveState ? adapter.getDeclarer(liveState.state) : null;
+    const liveContract = liveState ? adapter.getContract(liveState.state) : null;
+    const liveAnnouncements = liveState ? adapter.getAnnouncements(liveState.state) : [];
+    const liveKontraItems = liveState ? adapter.getKontraItems(liveState.state) : [];
 
     return {
       publicState: {
@@ -865,6 +887,9 @@ export const getMyGameState = query({
         recentEvents: (publicState.recentEvents ?? []) as BareEvent[],
         currentBid: liveCurrentBid,
         ...(liveDeclarer !== null ? { declarer: liveDeclarer } : {}),
+        contract: liveContract,
+        announcements: liveAnnouncements,
+        kontraItems: liveKontraItems,
       },
       myHand,
       legalMoves,
@@ -1354,25 +1379,8 @@ async function _applyMoveLogic(
   }
 
   if (adapter.isHandOver(nextState)) {
-    if (game.gameType === "strohmandeln" || game.gameType === "dreiertarock") {
-      // No fixed session end — pause and ask players whether to continue.
-      await _enterBetweenHands(ctx, gameId, game, nextState, sortedSeats, seatNames);
-      return { nextIsBot: false, trickJustResolved: false };
-    }
-
-    // Other games (Slobberhannes): immediate re-deal
-    const { state: newHandState, events: dealEvents } = adapter.reDeal(
-      nextState,
-      game.settings as Record<string, unknown>
-    );
-
-
-    await ctx.db.patch(liveStateRow._id, { state: newHandState });
-    await _updatePublicAndHands(ctx, gameId, newHandState, sortedSeats, adapter, undefined, dealEvents);
-
-    const nextPlayer = adapter.getCurrentPlayer(newHandState);
-    const nextIsBot = await _isBot(ctx, sortedSeats, nextPlayer);
-    return { nextIsBot, trickJustResolved: false };
+    await _enterBetweenHands(ctx, gameId, game, nextState, sortedSeats, seatNames);
+    return { nextIsBot: false, trickJustResolved: false };
   }
 
   // Normal move: update live state and public state
@@ -1407,6 +1415,7 @@ async function _updatePublicAndHands(
   const filteredEvents = (recentEvents ?? []).filter(e => ANIMATION_EVENT_FILTER.has(e.type));
   const patchBid = adapter.getCurrentBid(state);
   const patchDeclarer = adapter.getDeclarer(state);
+  const patchContract = adapter.getContract(state);
 
   if (publicRow) {
     await ctx.db.patch(publicRow._id, {
@@ -1420,6 +1429,9 @@ async function _updatePublicAndHands(
       recentEvents: filteredEvents,
       ...(patchBid != null ? { currentBid: patchBid as string } : {}),
       ...(patchDeclarer !== null ? { declarer: patchDeclarer as number } : {}),
+      ...(patchContract != null ? { contract: patchContract } : {}),
+      announcements: adapter.getAnnouncements(state),
+      kontraItems: adapter.getKontraItems(state),
     });
   }
 
@@ -1512,13 +1524,15 @@ async function _enterBetweenHands(
 ) {
   // Store continuation info so the next hand can be re-dealt without the live state
   const playerCount: number = handOverState.playerCount ?? sortedSeats.length;
+  const currentDealerIndex = getAdapter(game.gameType as GameType).getDealer(handOverState);
   const continuationData = {
     scores: [...(handOverState.scores ?? [])],
     nextHandMultiplier: handOverState.nextHandMultiplier ?? 1,
-    nextDealerIndex: ((handOverState.dealerIndex ?? 0) + 1) % playerCount,
-    scoring: handOverState.scoring ?? "Mayr",
+    nextDealerIndex: (currentDealerIndex + 1) % playerCount,
     playerCount,
-    deckType: (handOverState as Dreiertarock.State).deckType ?? '54',
+    ...(handOverState.scoring !== undefined ? { scoring: handOverState.scoring as string } : {}),
+    ...(handOverState.deckType !== undefined ? { deckType: handOverState.deckType as '54' | '42' } : {}),
+    ...(handOverState.loseAt !== undefined ? { loseAt: handOverState.loseAt as number } : {}),
   };
 
   // Delete all live rows — they are no longer needed
@@ -1553,16 +1567,6 @@ async function _enterBetweenHands(
     continuationVotes: votes,
   });
 
-  const scoreText = seatNames
-    .map((name, i) => `${name}: ${handOverState.scores?.[i] ?? 0}`)
-    .join("  |  ");
-  await ctx.db.insert("table_messages", {
-    gameId,
-    playerId: game.creatorPlayerId,
-    displayName: "Game",
-    text: `Hand complete! Running scores — ${scoreText}`,
-    ts: Date.now(),
-  });
 
   // If all seats are bots (edge case), start the next hand immediately
   if (Object.keys(votes).length === sortedSeats.length) {
@@ -1589,9 +1593,10 @@ async function _startNextHand(
     scores: number[];
     nextHandMultiplier: number;
     nextDealerIndex: number;
-    scoring: string;
+    scoring?: string;
     playerCount?: number;
     deckType?: '54' | '42';
+    loseAt?: number;
   };
 
   let newState: any;
@@ -1606,6 +1611,14 @@ async function _startNextHand(
       deckType: cd.deckType ?? '54',
     });
     dealEvents = Dreiertarock.getDealEvents(cd.nextDealerIndex, (cd.playerCount ?? 3) as 3 | 4, cd.deckType ?? '54');
+  } else if (game.gameType === "slobberhannes") {
+    newState = Slobberhannes.dealState({
+      scores: cd.scores,
+      dealerIndex: cd.nextDealerIndex,
+      playerCount: cd.playerCount ?? 4,
+      ...(cd.loseAt !== undefined ? { loseAt: cd.loseAt } : {}),
+    });
+    dealEvents = Slobberhannes.getDealEvents(cd.nextDealerIndex, cd.playerCount ?? 4);
   } else {
     newState = Strohmandeln.dealState({
       scores: cd.scores,
@@ -1627,35 +1640,29 @@ async function _startNextHand(
     currentTrick: newState.currentTrick ?? [],
     scores: newState.scores ?? [],
     currentTurn: currentPlayer,
-    dealer: newState.dealerIndex,
+    dealer: nextAdapter.getDealer(newState),
     trickNum: newState.trickNum ?? 0,
     phase: newState.phase ?? "bidding",
     recentEvents: handStartEvents,
+    announcements: [],
+    kontraItems: [],
     ...(nextBid != null ? { currentBid: nextBid as string } : {}),
   });
 
   const hands = newState.hands as Card[][];
-  for (let i = 0; i < sortedSeats.length; i++) {
-    await ctx.db.insert("player_hands", {
+  await Promise.all(sortedSeats.map((seat, i) =>
+    ctx.db.insert("player_hands", {
       gameId,
-      seatIndex: sortedSeats[i]!.seatIndex,
-      playerId: sortedSeats[i]!.playerId,
+      seatIndex: seat.seatIndex,
+      playerId: seat.playerId,
       hand: hands[i] ?? [],
-    });
-  }
+    })
+  ));
 
   await ctx.db.patch(gameId, {
     status: "active",
     continuationVotes: undefined,
   });
-
-  const seatNames = await Promise.all(
-    sortedSeats.map(async (s) => {
-      const p = await ctx.db.get(s.playerId);
-      return p?.displayName ?? "Unknown";
-    })
-  );
-
 
   if (currentPlayer >= 0) {
     const currentSeat = sortedSeats[currentPlayer];

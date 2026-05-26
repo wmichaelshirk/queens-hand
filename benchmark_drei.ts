@@ -115,9 +115,9 @@ function runConfig(label: string, cfg: PhaseConfig): ConfigResult {
       const uhuWinner    = birdWinnerAtPos(state.trickLog, 2, 'II');
       const kakaduWinner = birdWinnerAtPos(state.trickLog, 3, 'III');
 
-      if (announced.has('Pagat'))  { res.pagatAnn++;  if (pagatWinner  === ISMCTS_PLAYER) res.pagatOk++;  }
-      if (announced.has('Uhu'))    { res.uhuAnn++;    if (uhuWinner    === ISMCTS_PLAYER) res.uhuOk++;    }
-      if (announced.has('Kakadu')) { res.kakaduAnn++; if (kakaduWinner === ISMCTS_PLAYER) res.kakaduOk++; }
+      if (announced.has('Pagat'))  { res.pagatAnn++;  if (pagatWinner.type  === 'won' && pagatWinner.player  === ISMCTS_PLAYER) res.pagatOk++;  }
+      if (announced.has('Uhu'))    { res.uhuAnn++;    if (uhuWinner.type    === 'won' && uhuWinner.player    === ISMCTS_PLAYER) res.uhuOk++;    }
+      if (announced.has('Kakadu')) { res.kakaduAnn++; if (kakaduWinner.type === 'won' && kakaduWinner.player === ISMCTS_PLAYER) res.kakaduOk++; }
     }
   }
 

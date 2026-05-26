@@ -13,6 +13,7 @@
   import GameTableSlobberhannes from "$lib/components/GameTableSlobberhannes.svelte";
   import GameTableStrohmandeln from "$lib/components/GameTableStrohmandeln.svelte";
   import GameTableDreiertarock from "$lib/components/GameTableDreiertarock.svelte";
+  import GameInfoPanel from "$lib/components/GameInfoPanel.svelte";
   import { animatePlayedCard, animateTrickToWinner, animateFlipReveal, animatePileReveal, animateCardArrive, animateDeal, wait } from "$lib/cardAnimations";
 
   const gameId = $derived($page.params.gameId);
@@ -239,6 +240,7 @@
 
   let showHandSummary = $state(false);
   let lastShownSummaryKey = $state<string | null>(null);
+  let modalWasInVoteMode = false;
 
   $effect(() => {
     const gs = $gameState;
@@ -252,7 +254,14 @@
         showHandSummary = true;
       }
     }
-    if (gs.continuation) showHandSummary = true;
+    if (gs.continuation) {
+      showHandSummary = true;
+      modalWasInVoteMode = true;
+    } else if (modalWasInVoteMode) {
+      // Everyone voted continue; game already moved on — close without requiring "Got it".
+      showHandSummary = false;
+      modalWasInVoteMode = false;
+    }
   });
 
   // ── Card animations ────────────────────────────────────────────────────────────
@@ -323,6 +332,19 @@
     }
     return msgs;
   }
+
+  // Log hand-complete scores to the browser console when status transitions to between_hands.
+  let _lastTableStatus = $state<string | undefined>(undefined);
+  $effect(() => {
+    const status = $tableData?.status;
+    if (_lastTableStatus !== 'between_hands' && status === 'between_hands') {
+      const scores = $gameState?.publicState.scores ?? [];
+      const names = $tableData?.seats.map(s => s.displayName) ?? [];
+      const scoreText = scores.map((s, i) => `${names[i] ?? i}: ${s}`).join('  |  ');
+      console.log(`Hand complete! Running scores — ${scoreText}`);
+    }
+    _lastTableStatus = status;
+  });
 
   // Gate incoming state updates through the animation system.
   $effect(() => {
@@ -409,6 +431,7 @@
           .filter((e): e is Extract<AnimEvent, { type: 'CARD_REVEALED' }> => e.type === 'CARD_REVEALED')
           .map(e => `${e.player}-${e.pile}`),
       );
+      const clearedPublicState = { ...toState.publicState, recentEvents: [] as typeof toState.publicState.recentEvents };
       if (displayState?.strawmen && toState.strawmen) {
         const strawmen = toState.strawmen.map((pp, pi) =>
           pp.map((pile, li) =>
@@ -419,9 +442,9 @@
               : pile,
           ),
         );
-        displayState = { ...toState, strawmen };
+        displayState = { ...toState, strawmen, publicState: clearedPublicState };
       } else {
-        displayState = toState;
+        displayState = { ...toState, publicState: clearedPublicState };
       }
       _animRunning = false;
       if (browser) sessionStorage.setItem(`animKey:${gameId}`, _lastEventKey);
@@ -658,6 +681,24 @@
             scores: toState.publicState.scores,
           },
         };
+
+      } else if (ev.type === 'BID_MADE' || ev.type === 'BID_PASSED' || ev.type === 'CONTRACT_SET') {
+        displayState = {
+          ...displayState!,
+          publicState: { ...displayState!.publicState, recentEvents: [ev] },
+        };
+        await tick();
+      } else if (ev.type === 'ANNOUNCEMENT_MADE') {
+        // Collect all consecutive ANNOUNCEMENT_MADE events so one speech bubble shows them all.
+        const group: AnimEvent[] = [ev];
+        while (i + 1 < events.length && events[i + 1]!.type === 'ANNOUNCEMENT_MADE') {
+          group.push(events[++i]!);
+        }
+        displayState = {
+          ...displayState!,
+          publicState: { ...displayState!.publicState, recentEvents: group },
+        };
+        await tick();
       }
     }
   }
@@ -1112,6 +1153,17 @@
                 </div>
               </div>
             {/if}
+
+            <GameInfoPanel
+              phase={displayState.publicState.phase}
+              contract={displayState.publicState.contract}
+              currentBid={displayState.publicState.currentBid}
+              declarer={displayState.publicState.declarer ?? null}
+              announcements={displayState.publicState.announcements ?? []}
+              kontraItems={displayState.publicState.kontraItems ?? []}
+              scores={displayState.publicState.scores}
+              playerNames={displayState.seats.map(s => s.displayName)}
+            />
 
             {#if displayState.gameType === 'slobberhannes'}
               <GameTableSlobberhannes {displayState} {myEngineIndex} {isMyTurn} {busy} onPlayMove={playMove} />

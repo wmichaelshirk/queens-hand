@@ -6,6 +6,7 @@
   import Trick from './Trick.svelte';
   import HandCards from './HandCards.svelte';
   import Pile from './Pile.svelte';
+  import LastTrickPopover from './LastTrickPopover.svelte';
 
   interface Props {
     displayState: NonNullable<GameState>;
@@ -62,7 +63,8 @@
           isBot={topSeat.isBot}
           cardCount={topSeat.handSize}
           slot="top"
-          score={displayState.publicState.scores[topSeat.enginePlayerIndex] ?? 0}
+          enginePlayerIndex={topSeat.enginePlayerIndex}
+          recentEvents={displayState.publicState.recentEvents}
           isCurrentTurn={topSeat.enginePlayerIndex === displayState.publicState.currentTurn}
           isDealer={topSeat.enginePlayerIndex === displayState.publicState.dealer}
           isDeclarer={topSeat.enginePlayerIndex === declarerEngineIdx}
@@ -94,6 +96,10 @@
           displayState.seats.length
         )}
       />
+      <LastTrickPopover
+        lastTrick={displayState.publicState.lastCompletedTrick}
+        playerNames={displayState.seats.map(s => s.displayName)}
+      />
     </div>
   </div>
 
@@ -106,7 +112,8 @@
           isBot={myBottomSeat.isBot}
           cardCount={0}
           slot="bottom"
-          score={displayState.publicState.scores[myBottomSeat.enginePlayerIndex] ?? 0}
+          enginePlayerIndex={myBottomSeat.enginePlayerIndex}
+          recentEvents={displayState.publicState.recentEvents}
           isCurrentTurn={isMyTurn}
           isDealer={myBottomSeat.enginePlayerIndex === displayState.publicState.dealer}
           isDeclarer={myBottomSeat.enginePlayerIndex === declarerEngineIdx}

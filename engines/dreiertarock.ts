@@ -142,7 +142,7 @@ import {
   TRULL_RANKS, cardKey,
   cardPointValue, countCardPoints, countCardPoints42, isTarock, cardEquals,
   createDeck, createDeck42, shuffle,
-  trickWinner, birdWinnerAtPos, inferVoids,
+  trickWinner, birdWinnerAtPos, inferVoids, type BonusOutcome, asBonusOutcome,
   currentTrickWinnerCard, headsCurrentTrick,
   weakestMove, strongestMove, followTrickPolicy,
 } from '../lib/tarock';
@@ -237,17 +237,17 @@ const BONUS_CONFIGS: Record<BonusConfigKey, Array<{ name: string; base: number }
   ],
 };
 
-function _bonusWinner(summary: HandSummary, name: string): number | null {
+function _bonusWinner(summary: HandSummary, name: string): BonusOutcome {
   switch (name) {
     case 'Pagat':    return summary.pagatUltimoWinner;
     case 'Uhu':      return summary.uhuWinner;
     case 'Kakadu':   return summary.kakaduWinner;
-    case 'MondFang': return summary.mondFangWinner;
-    case 'Trull':    return summary.trullWinner;
-    case 'Kings':    return summary.kingsWinner;
-    case 'Absolute': return summary.absoluteWinner;
-    case 'Valat':    return summary.valatWinner;
-    default:         return null;
+    case 'MondFang': return asBonusOutcome(summary.mondFangWinner);
+    case 'Trull':    return asBonusOutcome(summary.trullWinner);
+    case 'Kings':    return asBonusOutcome(summary.kingsWinner);
+    case 'Absolute': return asBonusOutcome(summary.absoluteWinner);
+    case 'Valat':    return asBonusOutcome(summary.valatWinner);
+    default:         return { type: 'absent' };
   }
 }
 
@@ -266,9 +266,9 @@ export interface HandSummary {
   cardPoints:        Record<number, number>;   // player index → card points
   tricksWon:         Record<number, number>;
   valatWinner:       number | null;       // won all tricks
-  pagatUltimoWinner: number | null;
-  uhuWinner:         number | null;
-  kakaduWinner:      number | null;
+  pagatUltimoWinner: BonusOutcome;
+  uhuWinner:         BonusOutcome;
+  kakaduWinner:      BonusOutcome;
   mondFangWinner:    number | null;
   trullWinner:       number | null;       // captured (54-card) or dealt (42-card) all 3 Trull
   kingsWinner:       number | null;       // captured (54-card) or dealt (42-card) all 4 Kings
@@ -1274,8 +1274,8 @@ function _computeHandSummary(s: State): HandSummary {
     tricksWon,
     valatWinner,
     pagatUltimoWinner: birdWinnerAtPos(trickLog, 1, 'I'),
-    uhuWinner:         deckType === '42' ? null : birdWinnerAtPos(trickLog, 2, 'II'),
-    kakaduWinner:      deckType === '42' ? null : birdWinnerAtPos(trickLog, 3, 'III'),
+    uhuWinner:         deckType === '42' ? { type: 'absent' } : birdWinnerAtPos(trickLog, 2, 'II'),
+    kakaduWinner:      deckType === '42' ? { type: 'absent' } : birdWinnerAtPos(trickLog, 3, 'III'),
     mondFangWinner,
     trullWinner,
     kingsWinner,
@@ -1348,6 +1348,17 @@ function _soloMultiplier(contract: Contract, deckType: '54' | '42'): number {
   return (contract === 'Solo' || contract === 'SoloValat') ? 2 : 1;
 }
 
+function _effectiveWinner(
+  result:    BonusOutcome,
+  ann:       Announcement | null,
+  declarer:  number,
+  defenders: number[],
+): number {
+  if (result.type === 'won') return result.player;
+  const loser = result.type === 'attempted' ? result.player : ann!.player;
+  return loser === declarer ? defenders[0]! : declarer;
+}
+
 function _scoreDeclaredGame(summary: HandSummary, deltas: Record<number, number>): void {
   const { contract, declarer, activePlayers, cardPoints, scoring, valatWinner, deckType } = summary;
   if (declarer === null) return;
@@ -1385,20 +1396,16 @@ function _scoreDeclaredGame(summary: HandSummary, deltas: Record<number, number>
 
   // Bonuses — same each-against-each settlement
   const isValat = valatWinner !== null;
-  const _applyBonus = (winner: number | null, name: string, baseVal: number) => {
+  const _applyBonus = (result: BonusOutcome, name: string, baseVal: number) => {
     const ann      = summary.announcements.find(a => a.name === name) ?? null;
     const announced = ann !== null;
-    if (winner === null && !announced) return;
+    if (result.type === 'absent' && !announced) return;
 
     const kontra  = _bonusKontraMultiplier(summary.kontraItems, name);
     const annMult = announced ? 2 : 1;
     const value   = baseVal * soloMult * annMult * kontra;
 
-    // If nobody won but it was announced → announcer's team pays (failure penalty).
-    const effectiveWinner: number = winner !== null
-      ? winner
-      : ann!.player === declarer ? defenders[0]! : declarer;
-
+    const effectiveWinner = _effectiveWinner(result, ann, declarer, defenders);
     const sign = effectiveWinner === declarer ? 1 : -1;
     deltas[declarer]! += sign * value * defenders.length;
     for (const d of defenders) deltas[d]! -= sign * value;
@@ -1490,18 +1497,16 @@ function _buildBreakdownItems(summary: HandSummary, pi: number): Array<{ label: 
   // Bonuses
   const skipBonuses = deckType !== '42' && isValat;
   if (!skipBonuses) {
-    const addBonus = (winner: number | null, name: string, baseVal: number) => {
+    const addBonus = (result: BonusOutcome, name: string, baseVal: number) => {
       const ann      = announcements.find(a => a.name === name) ?? null;
       const announced = ann !== null;
-      if (winner === null && !announced) return;
+      if (result.type === 'absent' && !announced) return;
 
       const kontra  = _bonusKontraMultiplier(kontraItems, name);
       const annMult = announced ? 2 : 1;
       const value   = baseVal * soloMultiplier * annMult * kontra;
 
-      const effectiveWinner = winner !== null
-        ? winner
-        : ann!.player === declarer ? defenders[0]! : declarer;
+      const effectiveWinner = _effectiveWinner(result, ann, declarer, defenders);
       const sign = effectiveWinner === declarer ? 1 : -1;
 
       const deltaPi = pi === declarer
@@ -1511,7 +1516,7 @@ function _buildBreakdownItems(summary: HandSummary, pi: number): Array<{ label: 
       if (deltaPi === 0) return;
 
       let label = name;
-      label += winner !== null ? ' ✓' : ' ✗';
+      label += result.type === 'won' ? ' ✓' : ' ✗';
       const mods: string[] = [];
       if (announced) mods.push('ann.');
       if (soloMultiplier > 1) mods.push('solo ×2');

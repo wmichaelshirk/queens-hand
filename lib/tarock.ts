@@ -52,6 +52,14 @@ export interface TarockTrickRecord {
   winner:  number;
 }
 
+export type BonusOutcome =
+  | { type: 'absent' }
+  | { type: 'attempted'; player: number }  // played on correct trick, lost
+  | { type: 'won';       player: number }; // played on correct trick, won
+
+export const asBonusOutcome = (n: number | null): BonusOutcome =>
+  n !== null ? { type: 'won', player: n } : { type: 'absent' };
+
 // ── Card utilities ─────────────────────────────────────────────────────────────
 
 export function cardPointValue(card: Card): number {
@@ -221,13 +229,15 @@ export function birdWinnerAtPos(
   trickLog: TarockTrickRecord[],
   fromEnd:  number,
   birdRank: string,
-): number | null {
+): BonusOutcome {
   const idx = trickLog.length - fromEnd;
-  if (idx < 0) return null;
+  if (idx < 0) return { type: 'absent' };
   const trick = trickLog[idx]!;
   const play  = trick.plays.find(p => p.card.suit === 'T' && p.card.rank === birdRank);
-  if (!play) return null;
-  return trick.winner;
+  if (!play) return { type: 'absent' };
+  return play.playerIndex === trick.winner
+    ? { type: 'won',       player: trick.winner }
+    : { type: 'attempted', player: play.playerIndex };
 }
 
 // ── Void inference ─────────────────────────────────────────────────────────────

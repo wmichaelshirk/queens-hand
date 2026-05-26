@@ -6,6 +6,7 @@
   import Trick from './Trick.svelte';
   import HandCards from './HandCards.svelte';
   import PlayingCard from './PlayingCard.svelte';
+  import LastTrickPopover from './LastTrickPopover.svelte';
 
   interface Props {
     displayState: NonNullable<GameState>;
@@ -106,7 +107,8 @@
             isBot={seat.isBot}
             cardCount={seat.handSize}
             slot={seat.slot}
-            score={displayState.publicState.scores[seat.enginePlayerIndex] ?? 0}
+            enginePlayerIndex={seat.enginePlayerIndex}
+            recentEvents={displayState.publicState.recentEvents}
             isCurrentTurn={seat.enginePlayerIndex === displayState.publicState.currentTurn}
             isDealer={seat.enginePlayerIndex === displayState.publicState.dealer}
             isDeclarer={seat.enginePlayerIndex === declarerEngineIdx}
@@ -127,7 +129,8 @@
             isBot={seat.isBot}
             cardCount={seat.handSize}
             slot="left"
-            score={displayState.publicState.scores[seat.enginePlayerIndex] ?? 0}
+            enginePlayerIndex={seat.enginePlayerIndex}
+            recentEvents={displayState.publicState.recentEvents}
             isCurrentTurn={seat.enginePlayerIndex === displayState.publicState.currentTurn}
             isDealer={seat.enginePlayerIndex === displayState.publicState.dealer}
             isDeclarer={seat.enginePlayerIndex === declarerEngineIdx}
@@ -186,6 +189,11 @@
           displayState.seats.length
         )}
       />
+
+      <LastTrickPopover
+        lastTrick={displayState.publicState.lastCompletedTrick}
+        playerNames={displayState.seats.map(s => s.displayName)}
+      />
     </div>
 
     <div class="side-right">
@@ -196,7 +204,8 @@
             isBot={seat.isBot}
             cardCount={seat.handSize}
             slot="right"
-            score={displayState.publicState.scores[seat.enginePlayerIndex] ?? 0}
+            enginePlayerIndex={seat.enginePlayerIndex}
+            recentEvents={displayState.publicState.recentEvents}
             isCurrentTurn={seat.enginePlayerIndex === displayState.publicState.currentTurn}
             isDealer={seat.enginePlayerIndex === displayState.publicState.dealer}
             isDeclarer={seat.enginePlayerIndex === declarerEngineIdx}
@@ -216,7 +225,8 @@
           isBot={myBottomSeat.isBot}
           cardCount={0}
           slot="bottom"
-          score={displayState.publicState.scores[myBottomSeat.enginePlayerIndex] ?? 0}
+          enginePlayerIndex={myBottomSeat.enginePlayerIndex}
+          recentEvents={displayState.publicState.recentEvents}
           isCurrentTurn={isMyTurn}
           isDealer={myBottomSeat.enginePlayerIndex === displayState.publicState.dealer}
           isDeclarer={myBottomSeat.enginePlayerIndex === declarerEngineIdx}
